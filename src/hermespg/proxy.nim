@@ -73,41 +73,30 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
     flushFile(stdout)
 
   var leasedConn: BackendConn = nil
+  var clientReadFut: Future[PgMessage] = nil
 
   try:
     while not clientSock.isClosed and not shutdownRequested:
-      var clientMsg: PgMessage
+      # If no active read future from client, initiate one
+      if clientReadFut == nil:
+        clientReadFut = clientSock.readMessage()
 
-      # If client holds an active open transaction, monitor idle timeout
-      if leasedConn != nil and leasedConn.lastStatus != Idle:
-        let readFut = clientSock.readMessage()
-        let onTime = await withTimeout(readFut, pool.settings.idleTxTimeoutMs)
-        if not onTime:
-          # Transaction inactivity timeout exceeded: terminate client and rescue backend
-          echo fmt"[SECURITY] Client #{clientId} abandoned idle transaction (>{pool.settings.idleTxTimeoutMs}ms). Rescuing Backend #{leasedConn.id}..."
-          flushFile(stdout)
-          await clientSock.send(WireIdleTxTimeoutError)
-          clientSock.close()
-          discard await leasedConn.executeSimple("ROLLBACK;")
-          await pool.release(leasedConn, dirty = true)
-          leasedConn = nil
-          break
-        clientMsg = readFut.read()
-      else:
-        # Standard query wait
-        clientMsg = await clientSock.readMessage()
-
-      if clientMsg.length == 0:
-        break
-
-      if clientMsg.kind == MsgTerminate:
-        if verbose:
-          echo fmt"[CLIENT #{clientId}] Session closed normally ('X')"
-          flushFile(stdout)
-        break
-
-      # Client requires a backend connection to execute query
+      # Phase 1: Client is not holding a leased backend (Idle between queries/transactions)
       if leasedConn == nil:
+        let clientMsg = await clientReadFut
+        clientReadFut = nil
+
+        if clientMsg.length == 0:
+          # Normal client disconnection (EOF)
+          break
+
+        if clientMsg.kind == MsgTerminate:
+          if verbose:
+            echo fmt"[CLIENT #{clientId}] Session closed normally ('X')"
+            flushFile(stdout)
+          break
+
+        # Acquire physical backend connection from pool
         let acq = await pool.acquire()
         case acq.status
         of AcquireOk:
@@ -116,12 +105,10 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
             echo fmt"[POOL] Backend #{leasedConn.id} leased to Client #{clientId}"
             flushFile(stdout)
         of AcquireQueueFull:
-          # Fail-Fast: immediate rejection without queuing or overhead
           await clientSock.send(WireQueueFullError)
           clientSock.close()
           return
         of AcquireTimeout:
-          # Timed out waiting for available backend connection
           await clientSock.send(WireTimeoutError)
           clientSock.close()
           return
@@ -134,27 +121,78 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
           clientSock.close()
           return
 
-      # Forward client message to backend
-      await leasedConn.socket.writeMessage(clientMsg)
+        # Forward initial command that triggered lease
+        if clientMsg.kind == MsgParse:
+          leasedConn.isDirty = true
+        await leasedConn.socket.writeMessage(clientMsg)
 
-      # Forward backend responses to client until ReadyForQuery ('Z')
-      while true:
-        let srvMsg = await leasedConn.socket.readMessage()
-        if srvMsg.length == 0:
-          leasedConn.isAlive = false
-          break
+      # Phase 2: Active turn with leased backend (supports Simple & Extended Query pipelining)
+      var backendReadFut = leasedConn.socket.readMessage()
 
-        await clientSock.writeMessage(srvMsg)
+      while leasedConn != nil and not clientSock.isClosed and not leasedConn.socket.isClosed:
+        if clientReadFut == nil:
+          clientReadFut = clientSock.readMessage()
 
-        if srvMsg.kind == MsgReadyForQuery:
-          let status = if srvMsg.payload.len > 0: srvMsg.payload[0] else: '?'
-          leasedConn.lastStatus = toTransactionStatus(status)
+        var completedTurn = false
 
-          if status == 'I':
-            # Idle state: Query finished cleanly. Release backend without forcing DISCARD ALL
-            await pool.release(leasedConn, dirty = false)
+        # If client holds an active transaction block, monitor idle transaction timeout
+        if leasedConn.lastStatus != Idle:
+          let raceFut = clientReadFut or backendReadFut
+          let onTime = await withTimeout(raceFut, pool.settings.idleTxTimeoutMs)
+          if not onTime:
+            echo fmt"[SECURITY] Client #{clientId} abandoned idle transaction (>{pool.settings.idleTxTimeoutMs}ms). Rescuing Backend #{leasedConn.id}..."
+            flushFile(stdout)
+            await clientSock.send(WireIdleTxTimeoutError)
+            clientSock.close()
+            discard await leasedConn.executeSimple("ROLLBACK;")
+            await pool.release(leasedConn, dirty = true)
             leasedConn = nil
-          break
+            return
+        else:
+          await (clientReadFut or backendReadFut)
+
+        # 1. Forward incoming client messages to backend (pipelining)
+        if clientReadFut.finished:
+          let cMsg = clientReadFut.read()
+          clientReadFut = nil
+
+          if cMsg.length == 0 or cMsg.kind == MsgTerminate:
+            # Client closed socket unexpectedly mid-turn
+            break
+
+          if cMsg.kind == MsgParse:
+            leasedConn.isDirty = true
+
+          await leasedConn.socket.writeMessage(cMsg)
+
+        # 2. Forward backend responses to client
+        if backendReadFut.finished:
+          let bMsg = backendReadFut.read()
+          if bMsg.length == 0:
+            # Backend died or closed
+            leasedConn.isAlive = false
+            break
+
+          await clientSock.writeMessage(bMsg)
+
+          if bMsg.kind == MsgReadyForQuery:
+            let status = if bMsg.payload.len > 0: bMsg.payload[0] else: '?'
+            leasedConn.lastStatus = toTransactionStatus(status)
+
+            if status == 'I':
+              # Query / transaction completed. Release backend back to pool
+              await pool.release(leasedConn, dirty = false)
+              leasedConn = nil
+              completedTurn = true
+            else:
+              # InTransaction ('T') or FailedTransaction ('E').
+              # Turn completed, but transaction remains open and pinned!
+              completedTurn = true
+
+          if completedTurn:
+            break
+          else:
+            backendReadFut = leasedConn.socket.readMessage()
 
   except CatchableError as e:
     if verbose and not clientSock.isClosed:
