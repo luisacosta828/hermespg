@@ -1,13 +1,13 @@
-## Definiciones de tipos y constantes del protocolo Frontend/Backend v3.0 de PostgreSQL
+## Type definitions and constants for PostgreSQL Frontend/Backend protocol v3.0
 import std/tables
 
 const
-  # Códigos especiales de mensajes iniciales (no llevan byte de tipo)
-  SslRequestCode* = 80877103'i32    # 1234.5679 en decimal (0x04D2162F)
-  CancelRequestCode* = 80877102'i32 # 1234.5678 en decimal (0x04D2162E)
+  # Special initial message codes (do not carry a 1-byte type prefix)
+  SslRequestCode* = 80877103'i32    # 1234.5679 decimal (0x04D2162F)
+  CancelRequestCode* = 80877102'i32 # 1234.5678 decimal (0x04D2162E)
   ProtocolVersion30* = 196608'i32   # (3 shl 16) or 0
 
-  # Mensajes Backend -> Frontend
+  # Backend -> Frontend messages
   MsgParseComplete* = '1'
   MsgBindComplete* = '2'
   MsgCloseComplete* = '3'
@@ -21,7 +21,7 @@ const
   MsgRowDescription* = 'T'
   MsgReadyForQuery* = 'Z'
 
-  # Mensajes Frontend -> Backend
+  # Frontend -> Backend messages
   MsgBind* = 'B'
   MsgClose* = 'C'
   MsgDescribe* = 'D'
@@ -40,15 +40,15 @@ type
     InTransaction = 'T'
 
   PgMessage* = object
-    kind*: char       ## Identificador de 1 byte ('Q', 'Z', 'R', etc.) o '\0' para Startup
-    length*: int32    ## Longitud total declarada (incluye los 4 bytes de longitud)
-    payload*: string  ## Datos del mensaje (excluye el tipo y los 4 bytes de longitud)
+    kind*: char       ## 1-byte identifier ('Q', 'Z', 'R', etc.) or '\0' for Startup
+    length*: int32    ## Declared total length (includes the 4 bytes of length)
+    payload*: string  ## Message payload data (excludes type byte and 4 length bytes)
 
   StartupMessage* = object
     protocolVersion*: int32
     parameters*: Table[string, string]
 
-# Utilidad en tiempo de compilación para pre-ensamblar paquetes de error en formato binario PG
+# Compile-time utility to pre-assemble binary PostgreSQL error packets
 proc buildStaticErrorPacket(sqlState, message: string): string {.compileTime.} =
   let payload = "SFATAL\0VFATAL\0C" & sqlState & "\0M" & message & "\0\0"
   let totalLen = int32(4 + payload.len)
@@ -60,25 +60,25 @@ proc buildStaticErrorPacket(sqlState, message: string): string {.compileTime.} =
   result = "E" & beLen & payload
 
 const
-  # Paquete pre-compilado: Timeout en cola de espera (SQLSTATE 53300: too_many_connections)
+  # Pre-compiled packet: Queue acquisition timeout (SQLSTATE 53300: too_many_connections)
   WireTimeoutError* = buildStaticErrorPacket(
     "53300",
     "connection pool: timeout waiting for available backend connection"
   )
 
-  # Paquete pre-compilado: Cola saturada (Rechazo inmediato / Fail-Fast)
+  # Pre-compiled packet: Saturated queue (Immediate Fail-Fast rejection)
   WireQueueFullError* = buildStaticErrorPacket(
     "53300",
     "connection pool: request rejected immediately, queue is full"
   )
 
-  # Paquete pre-compilado: Transacción abandonada (SQLSTATE 25P03: idle_in_transaction_session_timeout)
+  # Pre-compiled packet: Abandoned idle transaction (SQLSTATE 25P03: idle_in_transaction_session_timeout)
   WireIdleTxTimeoutError* = buildStaticErrorPacket(
     "25P03",
     "connection pool: transaction closed due to idle timeout"
   )
 
-  # Paquete pre-compilado: Pool en apagado
+  # Pre-compiled packet: Server shutting down (SQLSTATE 57P01: admin_shutdown)
   WirePoolShuttingDownError* = buildStaticErrorPacket(
     "57P01",
     "connection pool: server is shutting down"

@@ -1,4 +1,4 @@
-## Herramienta de benchmark asíncrono para probar 1,000+ conexiones concurrentes en el pool
+## High-concurrency benchmark tool simulating 1,000+ concurrent clients on the pool
 import std/[asyncdispatch, asyncnet, times, strformat, strutils, os]
 import hermespg/protocol/[messages, codec]
 
@@ -23,16 +23,16 @@ proc simulateClient(id: int, host: string, port: Port): Future[bool] {.async.} =
     let startupMsg = PgMessage(kind: '\0', length: int32(4 + startupPayload.len), payload: startupPayload)
     await sock.writeMessage(startupMsg)
 
-    # Esperar ReadyForQuery ('Z')
+    # Wait for ReadyForQuery ('Z')
     while true:
       let msg = await sock.readMessage()
       if msg.length == 0 or msg.kind == MsgReadyForQuery: break
 
-    # 3. Enviar consulta
+    # 3. Send simple query
     let queryMsg = PgMessage(kind: MsgQuery, length: 14, payload: "SELECT 42;\0")
     await sock.writeMessage(queryMsg)
 
-    # Esperar respuesta
+    # Wait for response
     while true:
       let msg = await sock.readMessage()
       if msg.length == 0 or msg.kind == MsgReadyForQuery: break
@@ -43,9 +43,9 @@ proc simulateClient(id: int, host: string, port: Port): Future[bool] {.async.} =
     return true
   except CatchableError as e:
     if id == 1:
-      echo fmt"[DIAGNÓSTICO] Error en Cliente #1: {e.msg}"
+      echo fmt"[DIAGNOSTIC] Client #1 error: {e.msg}"
       if "Connection refused" in e.msg or "111" in e.msg:
-        echo "[DIAGNÓSTICO] -> Asegúrate de tener './hermespg' corriendo en otra terminal antes de ejecutar ./bench"
+        echo "[DIAGNOSTIC] -> Ensure './hermespg' is running in another terminal before executing ./bench"
     if not sock.isClosed: sock.close()
     return false
 
@@ -54,7 +54,7 @@ proc main() {.async.} =
   let host = "127.0.0.1"
   let port = Port(6432)
 
-  echo fmt"[*] Iniciando prueba de carga masiva con {totalClients} clientes concurrentes..."
+  echo fmt"[*] Starting mass load benchmark with {totalClients} concurrent clients..."
   let startTime = cpuTime()
 
   var futures: seq[Future[bool]] = @[]
@@ -72,11 +72,11 @@ proc main() {.async.} =
   let tps = float(successes) / max(elapsed, 0.001)
 
   echo "=========================================="
-  echo fmt"[RESULTADO] Total clientes: {totalClients}"
-  echo fmt"[RESULTADO] Exitosos:        {successes}"
-  echo fmt"[RESULTADO] Fallidos:        {failures}"
-  echo fmt"[RESULTADO] Tiempo total:    {elapsed:.3f} segundos"
-  echo fmt"[RESULTADO] Throughput:      {tps:.1f} consultas/segundo"
+  echo fmt"[RESULT] Total clients: {totalClients}"
+  echo fmt"[RESULT] Successful:    {successes}"
+  echo fmt"[RESULT] Failed:        {failures}"
+  echo fmt"[RESULT] Total time:    {elapsed:.3f} seconds"
+  echo fmt"[RESULT] Throughput:    {tps:.1f} queries/second"
   echo "=========================================="
 
 when isMainModule:

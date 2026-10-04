@@ -1,4 +1,4 @@
-## Conexión autónoma hacia PostgreSQL gestionada por el Pool
+## Autonomous PostgreSQL backend connection managed by the Pool
 import std/[asyncnet, asyncdispatch, tables, strutils, strformat, md5]
 import ../protocol/[messages, codec]
 
@@ -12,7 +12,7 @@ type
     secretKey*: int32
     parameters*: Table[string, string]
     isAlive*: bool
-    isDirty*: bool  ## Indica si la conexión fue usada y requiere limpieza
+    isDirty*: bool  ## Indicates whether the connection was used and requires session cleanup
 
 proc newBackendConn*(id: int): BackendConn =
   BackendConn(
@@ -35,7 +35,7 @@ proc toTransactionStatus*(c: char): TransactionStatus =
   else: Idle
 
 proc executeSimple*(conn: BackendConn, sql: string): Future[bool] {.async.} =
-  ## Ejecuta una consulta simple de forma síncrona en el backend (útil para DISCARD ALL, ping, etc.)
+  ## Executes a simple query synchronously on backend (useful for DISCARD ALL, ping, etc.)
   if not conn.isAlive or conn.socket.isClosed:
     return false
 
@@ -67,19 +67,19 @@ proc executeSimple*(conn: BackendConn, sql: string): Future[bool] {.async.} =
   return success
 
 proc connectBackend*(host: string, port: Port, user, password, database: string, connId: int): Future[BackendConn] {.async.} =
-  ## Conecta y autentica una conexión física contra PostgreSQL
+  ## Establishes TCP connection and completes authentication handshake with PostgreSQL
   let conn = newBackendConn(connId)
   conn.socket = newAsyncSocket(buffered = false)
 
   await conn.socket.connect(host, port)
 
-  # Construir StartupMessage
+  # Build StartupMessage
   var payload = writeInt32BE(ProtocolVersion30)
   payload.add("user\0" & user & "\0")
   payload.add("database\0" & database & "\0")
   payload.add("client_encoding\0UTF8\0")
   payload.add("application_name\0hermespg\0")
-  payload.add("\0") # Terminador final
+  payload.add("\0") # Final null terminator
 
   let startupMsg = PgMessage(
     kind: '\0',
@@ -89,12 +89,12 @@ proc connectBackend*(host: string, port: Port, user, password, database: string,
 
   await conn.socket.writeMessage(startupMsg)
 
-  # Ciclo de autenticación
+  # Authentication loop
   while true:
     let msg = await conn.socket.readMessage()
     if msg.length == 0:
       conn.socket.close()
-      raise newException(IOError, fmt"[Backend #{connId}] Conexión cerrada por el servidor durante handshake")
+      raise newException(IOError, fmt"[Backend #{connId}] Connection closed by server during handshake")
 
     case msg.kind
     of MsgAuth:
@@ -113,9 +113,9 @@ proc connectBackend*(host: string, port: Port, user, password, database: string,
         )
         await conn.socket.writeMessage(passMsg)
       of 5:
-        # MD5 password: sal de 4 bytes en msg.payload[4..7]
+        # MD5 password: 4-byte salt in msg.payload[4..7]
         if msg.payload.len < 8:
-          raise newException(ValueError, "Payload insuficiente para autenticación MD5")
+          raise newException(ValueError, "Insufficient payload for MD5 authentication")
         let salt = msg.payload[4 .. 7]
         let inner = getMD5(password & user)
         let outer = "md5" & getMD5(inner & salt) & "\0"
@@ -126,9 +126,9 @@ proc connectBackend*(host: string, port: Port, user, password, database: string,
         )
         await conn.socket.writeMessage(passMsg)
       else:
-        raise newException(ValueError, fmt"Mecanismo de autenticación no soportado: {authType}")
+        raise newException(ValueError, fmt"Unsupported authentication mechanism: {authType}")
     of MsgParameterStatus:
-      # Guardar parámetros de sesión
+      # Store session parameters
       let nullPos = msg.payload.find('\0')
       if nullPos != -1:
         let key = msg.payload[0 ..< nullPos]
@@ -140,7 +140,7 @@ proc connectBackend*(host: string, port: Port, user, password, database: string,
         conn.secretKey = readInt32BE(msg.payload, 4)
     of MsgErrorResponse:
       conn.socket.close()
-      raise newException(IOError, fmt"[Backend #{connId}] Error de autenticación de PostgreSQL")
+      raise newException(IOError, fmt"[Backend #{connId}] PostgreSQL authentication failed")
     of MsgReadyForQuery:
       if msg.payload.len > 0:
         conn.lastStatus = toTransactionStatus(msg.payload[0])
@@ -152,7 +152,7 @@ proc connectBackend*(host: string, port: Port, user, password, database: string,
   return conn
 
 proc terminate*(conn: BackendConn): Future[void] {.async.} =
-  ## Cierra la conexión enviando el paquete Terminate ('X')
+  ## Closes the connection by sending the Terminate ('X') packet
   if conn != nil and conn.socket != nil and not conn.socket.isClosed:
     try:
       let termMsg = PgMessage(kind: MsgTerminate, length: 4, payload: "")

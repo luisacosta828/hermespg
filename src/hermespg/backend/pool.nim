@@ -1,4 +1,4 @@
-## Gestor del Pool de Conexiones Backend con soporte para colas acotadas O(1), Load Shedding y Zero-Exception flow
+## Connection Pool Manager with bounded O(1) wait queues, Load Shedding, and Fail-Fast flow
 import std/[asyncnet, asyncdispatch, strformat, deques]
 import ../protocol/messages
 import ./connection
@@ -23,11 +23,11 @@ type
     password*: string
     database*: string
     maxConnections*: int
-    maxQueueSize*: int              ## Límite de clientes esperando en cola (Load Shedding)
+    maxQueueSize*: int              ## Max clients waiting in queue before immediate Load Shedding
     acquireTimeoutMs*: int
-    idleTxTimeoutMs*: int           ## Tiempo máximo de una transacción inactiva antes de forzar ROLLBACK
-    resetQuery*: string             ## Consulta de limpieza (ej. "DISCARD ALL;")
-    resetBeforeFirstQuery*: bool    ## Si debe limpiarse antes de prestarla
+    idleTxTimeoutMs*: int           ## Max idle time for an in-progress transaction before forcing ROLLBACK
+    resetQuery*: string             ## Session cleanup query (e.g. "DISCARD ALL;")
+    resetBeforeFirstQuery*: bool    ## Whether to sanitize dirty connection before leasing
 
   PendingClient* = ref object
     fut*: Future[BackendConn]
@@ -55,7 +55,7 @@ proc acquire*(pool: ConnectionPool): Future[AcquireResult] {.async.} =
   if pool.isShuttingDown:
     return AcquireResult(status: AcquireShuttingDown, conn: nil)
 
-  # 1. Reutilizar conexión en idle
+  # 1. Reuse available idle connection
   while pool.idleConns.len > 0:
     let conn = pool.idleConns.pop()
     if conn.isAlive and not conn.socket.isClosed:
@@ -71,7 +71,7 @@ proc acquire*(pool: ConnectionPool): Future[AcquireResult] {.async.} =
     else:
       dec pool.activeCount
 
-  # 2. Abrir nueva conexión física si hay cupo
+  # 2. Open new physical connection if capacity permits
   if pool.activeCount < pool.settings.maxConnections:
     inc pool.activeCount
     let connId = pool.nextConnId
@@ -90,11 +90,11 @@ proc acquire*(pool: ConnectionPool): Future[AcquireResult] {.async.} =
       dec pool.activeCount
       return AcquireResult(status: AcquireFailed, conn: nil, errorMsg: e.msg)
 
-  # 3. Control de sobrecarga Fail-Fast (Load Shedding en O(1))
+  # 3. Fail-Fast overload protection (O(1) Load Shedding)
   if pool.waitQueue.len >= pool.settings.maxQueueSize:
     return AcquireResult(status: AcquireQueueFull, conn: nil)
 
-  # 4. Encolar en deque O(1) con timeout
+  # 4. Enqueue in O(1) deque with acquisition timeout
   let pending = PendingClient(
     fut: newFuture[BackendConn]("acquire.wait"),
     isCancelled: false
@@ -136,7 +136,7 @@ proc release*(pool: ConnectionPool, conn: BackendConn, dirty = false) {.async.} 
     dec pool.activeCount
     return
 
-  # Buscar el siguiente cliente esperando en O(1)
+  # Dispatch directly to next waiting client in O(1)
   while pool.waitQueue.len > 0:
     let nextClient = pool.waitQueue.popFirst()
     if not nextClient.isCancelled and not nextClient.fut.finished:
@@ -155,7 +155,7 @@ proc shutdown*(pool: ConnectionPool, graceTimeoutMs = 5000): Future[void] {.asyn
     let pending = pool.waitQueue.popFirst()
     if not pending.fut.finished:
       pending.isCancelled = true
-      pending.fut.fail(newException(IOError, "El pool fue cerrado"))
+      pending.fut.fail(newException(IOError, "Connection pool was closed"))
 
   for conn in pool.idleConns:
     await conn.terminate()
@@ -168,4 +168,4 @@ proc shutdown*(pool: ConnectionPool, graceTimeoutMs = 5000): Future[void] {.asyn
     await sleepAsync(checkInterval)
     waited.inc(checkInterval)
 
-  echo fmt"[POOL] Apagado finalizado. Conexiones activas restantes: {pool.activeCount}"
+  echo fmt"[POOL] Shutdown completed. Remaining active connections: {pool.activeCount}"

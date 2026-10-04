@@ -1,33 +1,33 @@
-## Módulo de codificación y decodificación binaria para el protocolo PostgreSQL v3.0
+## Binary serialization and deserialization module for PostgreSQL v3.0 protocol
 import std/[asyncnet, asyncdispatch, endians, tables]
 import ./messages
 
 proc readInt32BE*(data: string, offset = 0): int32 =
-  ## Lee un entero de 32 bits con signo en orden Big-Endian desde un string
-  assert offset + 4 <= data.len, "Buffer insuficiente para leer int32"
+  ## Reads a 32-bit signed big-endian integer from a string buffer
+  assert offset + 4 <= data.len, "Buffer underflow reading int32"
   bigEndian32(addr result, unsafeAddr data[offset])
 
 proc writeInt32BE*(val: int32): string =
-  ## Serializa un entero de 32 bits con signo a Big-Endian (4 bytes)
+  ## Serializes a 32-bit signed integer to big-endian bytes (4 bytes)
   result = newString(4)
   var v = val
   bigEndian32(addr result[0], addr v)
 
 proc readInt16BE*(data: string, offset = 0): int16 =
-  ## Lee un entero de 16 bits con signo en orden Big-Endian desde un string
-  assert offset + 2 <= data.len, "Buffer insuficiente para leer int16"
+  ## Reads a 16-bit signed big-endian integer from a string buffer
+  assert offset + 2 <= data.len, "Buffer underflow reading int16"
   bigEndian16(addr result, unsafeAddr data[offset])
 
 proc writeInt16BE*(val: int16): string =
-  ## Serializa un entero de 16 bits con signo a Big-Endian (2 bytes)
+  ## Serializes a 16-bit signed integer to big-endian bytes (2 bytes)
   result = newString(2)
   var v = val
   bigEndian16(addr result[0], addr v)
 
 proc readExact*(socket: AsyncSocket, size: int): Future[string] {.async.} =
-  ## Lee exactamente `size` bytes de un socket asíncrono.
-  ## Si la conexión se cierra antes de leer cualquier byte, retorna "".
-  ## Si la conexión se cierra tras leer parcialmente, lanza IOError.
+  ## Reads exactly `size` bytes from an asynchronous socket.
+  ## Returns "" if the socket closes cleanly before reading any bytes.
+  ## Raises IOError if the socket closes prematurely after partial read.
   if size == 0:
     return ""
   result = newString(size)
@@ -36,32 +36,32 @@ proc readExact*(socket: AsyncSocket, size: int): Future[string] {.async.} =
     let chunk = await socket.recv(size - totalRead)
     if chunk.len == 0:
       if totalRead == 0:
-        return "" # Conexión cerrada limpiamente
-      raise newException(IOError, "Conexión cerrada prematuramente durante la lectura de paquete")
+        return "" # Clean connection close
+      raise newException(IOError, "Connection closed prematurely while reading packet")
     copyMem(addr result[totalRead], unsafeAddr chunk[0], chunk.len)
     totalRead.inc(chunk.len)
 
 proc readMessage*(socket: AsyncSocket): Future[PgMessage] {.async.} =
-  ## Lee un mensaje estándar de PostgreSQL (1 byte tipo + 4 bytes longitud + payload)
+  ## Reads a standard PostgreSQL message (1-byte type + 4-byte length + payload)
   let typeByte = await socket.readExact(1)
   if typeByte.len == 0:
-    # EOF detectado
+    # EOF detected
     return PgMessage(kind: '\0', length: 0, payload: "")
 
   let lenBytes = await socket.readExact(4)
   if lenBytes.len < 4:
-    raise newException(IOError, "EOF inesperado leyendo longitud de paquete")
+    raise newException(IOError, "Unexpected EOF reading packet length")
 
   let totalLen = readInt32BE(lenBytes, 0)
   if totalLen < 4:
-    raise newException(ValueError, "Longitud de paquete inválida: " & $totalLen)
+    raise newException(ValueError, "Invalid packet length: " & $totalLen)
 
   let payloadLen = totalLen - 4
   var payload = ""
   if payloadLen > 0:
     payload = await socket.readExact(payloadLen)
     if payload.len < payloadLen:
-      raise newException(IOError, "EOF inesperado leyendo payload de paquete")
+      raise newException(IOError, "Unexpected EOF reading packet payload")
 
   return PgMessage(
     kind: typeByte[0],
@@ -70,17 +70,17 @@ proc readMessage*(socket: AsyncSocket): Future[PgMessage] {.async.} =
   )
 
 proc readStartupOrSsl*(socket: AsyncSocket): Future[PgMessage] {.async.} =
-  ## Lee el primer mensaje de un cliente PostgreSQL (StartupMessage o SSLRequest).
-  ## Estos mensajes NO tienen el byte de tipo inicial, inician directamente con 4 bytes de longitud.
+  ## Reads the initial message from a PostgreSQL client (StartupMessage or SSLRequest).
+  ## These messages start directly with 4 bytes of length without a type prefix.
   let lenBytes = await socket.readExact(4)
   if lenBytes.len == 0:
     return PgMessage(kind: '\0', length: 0, payload: "")
   if lenBytes.len < 4:
-    raise newException(IOError, "EOF inesperado leyendo cabecera inicial")
+    raise newException(IOError, "Unexpected EOF reading startup header")
 
   let totalLen = readInt32BE(lenBytes, 0)
   if totalLen < 4:
-    raise newException(ValueError, "Longitud inicial inválida: " & $totalLen)
+    raise newException(ValueError, "Invalid startup packet length: " & $totalLen)
 
   let payloadLen = totalLen - 4
   var payload = ""
@@ -94,9 +94,9 @@ proc readStartupOrSsl*(socket: AsyncSocket): Future[PgMessage] {.async.} =
   )
 
 proc parseStartupMessage*(payload: string): StartupMessage =
-  ## Decodifica el payload de un StartupMessage extrayendo la versión y pares clave-valor
+  ## Decodes the payload of a StartupMessage extracting protocol version and key-value pairs
   if payload.len < 4:
-    raise newException(ValueError, "Payload insuficiente para StartupMessage")
+    raise newException(ValueError, "Insufficient payload for StartupMessage")
 
   result.protocolVersion = readInt32BE(payload, 0)
   result.parameters = initTable[string, string]()
@@ -104,36 +104,36 @@ proc parseStartupMessage*(payload: string): StartupMessage =
   var i = 4
   while i < payload.len:
     if payload[i] == '\0':
-      # Byte nulo final terminador del paquete
+      # Final null byte terminator of packet
       break
 
-    # Leemos la clave hasta el '\0'
+    # Read key up to '\0'
     let keyStart = i
     while i < payload.len and payload[i] != '\0':
       inc i
     if i >= payload.len: break
     let key = payload[keyStart ..< i]
-    inc i # saltamos el '\0' de la clave
+    inc i # skip '\0'
 
-    # Leemos el valor hasta el '\0'
+    # Read val up to '\0'
     let valStart = i
     while i < payload.len and payload[i] != '\0':
       inc i
     if i >= payload.len: break
     let val = payload[valStart ..< i]
-    inc i # saltamos el '\0' del valor
+    inc i # skip '\0'
 
     result.parameters[key] = val
 
 proc encode*(msg: PgMessage): string =
-  ## Serializa un PgMessage a bytes listos para transmitirse por el cable
+  ## Serializes a PgMessage to wire bytes ready for transmission
   if msg.kind == '\0':
-    # Mensaje sin byte de tipo (ej. StartupMessage reenviado)
+    # Message without type byte (e.g. forwarded StartupMessage)
     result = writeInt32BE(msg.length) & msg.payload
   else:
     result = $msg.kind & writeInt32BE(msg.length) & msg.payload
 
 proc writeMessage*(socket: AsyncSocket, msg: PgMessage): Future[void] {.async.} =
-  ## Envía un PgMessage a través de un socket asíncrono
+  ## Sends a PgMessage across an asynchronous socket
   let wireBytes = encode(msg)
   await socket.send(wireBytes)

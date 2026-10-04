@@ -6,8 +6,8 @@ when defined(posix):
   import std/posix
 
 proc raiseFileDescriptorLimit() =
-  ## Eleva automáticamente el límite de sockets abiertos en Linux (RLIMIT_NOFILE)
-  ## de 1,024 al límite permitido por el sistema (hasta 65,536)
+  ## Automatically raises open file/socket descriptor limit on Linux (RLIMIT_NOFILE)
+  ## from 1,024 to the system allowed maximum (up to 65,536)
   when defined(posix):
     var limit: RLimit
     if getrlimit(RLIMIT_NOFILE, limit) == 0:
@@ -15,12 +15,12 @@ proc raiseFileDescriptorLimit() =
       if limit.rlim_cur < desired:
         limit.rlim_cur = desired
         if setrlimit(RLIMIT_NOFILE, limit) == 0:
-          echo fmt"[*] Límite de sockets del sistema elevado a: {desired} descriptores"
+          echo fmt"[*] System file descriptor limit raised to: {desired} descriptors"
         else:
-          echo "[WARN] No se pudo elevar el límite de descriptores"
+          echo "[WARN] Could not raise system file descriptor limit"
 
 proc onControlC() {.noconv.} =
-  echo "\n[INFO] Señal de terminación recibida (Ctrl+C). Iniciando apagado seguro..."
+  echo "\n[INFO] Termination signal received (Ctrl+C). Initiating graceful shutdown..."
   shutdownRequested = true
   if shutdownFuture != nil and not shutdownFuture.finished:
     shutdownFuture.complete()
