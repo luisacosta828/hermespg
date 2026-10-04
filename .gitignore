@@ -6,6 +6,7 @@ nimcache/
 /bench
 /tests/test_protocol
 /tests/test_pool
+/tests/test_config
 /tests/bench_load
 *.out
 

@@ -4,6 +4,7 @@ import ./backend/[connection, pool]
 
 type
   ServerConfig* = object
+    listenAddress*: string
     listenPort*: Port
     poolSettings*: PoolSettings
     verbose*: bool
@@ -191,10 +192,14 @@ proc startServer*(config: ServerConfig) {.async.} =
 
   let server = newAsyncSocket(buffered = false)
   server.setSockOpt(OptReuseAddr, true)
-  server.bindAddr(config.listenPort)
+  if config.listenAddress.len > 0 and config.listenAddress != "0.0.0.0":
+    server.bindAddr(config.listenPort, config.listenAddress)
+  else:
+    server.bindAddr(config.listenPort)
   server.listen()
 
-  echo fmt"[*] Proxy escuchando en 0.0.0.0:{config.listenPort.int}"
+  let bindDisplay = if config.listenAddress.len > 0: config.listenAddress else: "0.0.0.0"
+  echo fmt"[*] Proxy escuchando en {bindDisplay}:{config.listenPort.int}"
   echo fmt"[*] Backends físicos: {config.poolSettings.maxConnections} conexiones"
   echo fmt"[*] Cola acotada (Fail-Fast): {config.poolSettings.maxQueueSize} clientes máx en espera"
   echo fmt"[*] Timeout de adquisición: {config.poolSettings.acquireTimeoutMs}ms"

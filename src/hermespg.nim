@@ -1,6 +1,6 @@
 import std/[asyncdispatch, strformat]
 import hermespg/proxy
-import hermespg/backend/pool
+import hermespg/config
 
 when defined(posix):
   import std/posix
@@ -26,28 +26,10 @@ proc onControlC() {.noconv.} =
     shutdownFuture.complete()
 
 proc main() =
+  let serverConfig = parseConfig()
+
   setControlCHook(onControlC)
   raiseFileDescriptorLimit()
-
-  let poolSettings = PoolSettings(
-    pgHost: "127.0.0.1",
-    pgPort: Port(5432),
-    user: "postgres",
-    password: "",
-    database: "postgres",
-    maxConnections: 10,           # 10 conexiones físicas hacia Postgres
-    maxQueueSize: 2000,           # Soporta hasta 2,000 clientes en cola de espera
-    acquireTimeoutMs: 15000,      # 15s de espera máxima en cola para cargas masivas
-    idleTxTimeoutMs: 8000,        # 8s de inactividad máxima en transacciones
-    resetQuery: "DISCARD ALL;",   # Limpieza de sesión
-    resetBeforeFirstQuery: true   # Limpiar antes de entregar al cliente
-  )
-
-  let serverConfig = ServerConfig(
-    listenPort: Port(6432),
-    poolSettings: poolSettings,
-    verbose: false                # En cargas de 1,000 clientes, el logging a terminal satura el kernel
-  )
 
   waitFor startServer(serverConfig)
 
