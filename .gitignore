@@ -1,0 +1,16 @@
+# Nim cache and binaries
+nimcache/
+*.exe
+/pool
+/hermespg
+/bench
+/tests/test_protocol
+/tests/test_pool
+/tests/bench_load
+*.out
+
+# Editor and temporary files
+.vscode/
+.idea/
+*.swp
+*~
