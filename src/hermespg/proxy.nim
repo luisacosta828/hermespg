@@ -158,6 +158,7 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
 
           if cMsg.length == 0 or cMsg.kind == MsgTerminate:
             # Client closed socket unexpectedly mid-turn
+            clientSock.close()
             break
 
           if cMsg.kind == MsgParse:
@@ -169,11 +170,16 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
         if backendReadFut.finished:
           let bMsg = backendReadFut.read()
           if bMsg.length == 0:
-            # Backend died or closed
+            # Backend died or closed unexpectedly
             leasedConn.isAlive = false
+            clientSock.close()
             break
 
           await clientSock.writeMessage(bMsg)
+
+          if bMsg.kind == MsgParameterStatus:
+            # Runtime session parameter changed (e.g. SET timezone)
+            leasedConn.isDirty = true
 
           if bMsg.kind == MsgReadyForQuery:
             let status = if bMsg.payload.len > 0: bMsg.payload[0] else: '?'
