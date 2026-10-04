@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secretpassword
+      POSTGRES_DB: testdb
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+      POSTGRES_HOST_AUTH_METHOD: "md5"
+    command: postgres -c password_encryption=md5
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d testdb"]
+      interval: 2s
+      timeout: 3s
+      retries: 5
+
+  hermespg:
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: secretpassword
+      PGDATABASE: testdb
+      HERMES_PORT: 6432
+      HERMES_MAX_CONNS: 10
+      HERMES_VERBOSE: "false"
+
+  test-node:
+    build:
+      context: ./node
+    depends_on:
+      - hermespg
+    environment:
+      PGHOST: hermespg
+      PGPORT: 6432
+      PGUSER: postgres
+      PGPASSWORD: secretpassword
+      PGDATABASE: testdb
+
+  test-go:
+    build:
+      context: ./go
+    depends_on:
+      - hermespg
+    environment:
+      PGHOST: hermespg
+      PGPORT: 6432
+      PGUSER: postgres
+      PGPASSWORD: secretpassword
+      PGDATABASE: testdb
+
+  test-python:
+    build:
+      context: ./python
+    depends_on:
+      - hermespg
+    environment:
+      PGHOST: hermespg
+      PGPORT: 6432
+      PGUSER: postgres
+      PGPASSWORD: secretpassword
+      PGDATABASE: testdb
+
+  test-csharp:
+    build:
+      context: ./csharp
+    depends_on:
+      - hermespg
+    environment:
+      PGHOST: hermespg
+      PGPORT: 6432
+      PGUSER: postgres
+      PGPASSWORD: secretpassword
+      PGDATABASE: testdb
