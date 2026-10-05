@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.1] - 2026-10-04
+
+### Fixed
+* **Security Hardening for `-d:danger` Mode**:
+  * Enforced explicit runtime buffer boundary checks in protocol codec (`readInt32BE`, `readInt16BE`) replacing compiler `assert` statements. Guarantees buffer underflows are intercepted with controlled `ValueError` exceptions even when all compiler checks are stripped.
+  * Hardened `ParameterStatus` packet parser with safe forward search for null terminators, eliminating negative slicing indices on malformed network frames.
+
+### Changed
+* **Official Branding**:
+  * Updated official logo emblem to a clean, square 1:1 format without burned-in typography or confusing subtitles.
+
+---
+
 ## [0.1.0] - 2026-10-04
 
 ### Added
