@@ -191,7 +191,7 @@ HermesPG follows an iterative, production-grade development roadmap:
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        HermesPG Development Roadmap                     │
 └────────────────────────────────────────────────────────────────────────┘
-  [x] Week 1: Core Proxy & Transaction Engine (COMPLETED)
+  [x] Phase 1: Core Engine & Transaction Pooling (Current Release)
        ├── Sub-0.2ms pre-assembled binary handshake
        ├── Full Extended Query protocol pipelining (Parse/Bind/Execute/Sync)
        ├── Transaction state pinning & dirty session tracking
@@ -200,20 +200,20 @@ HermesPG follows an iterative, production-grade development roadmap:
        ├── 287 KB static binary & 326 KB Docker Scratch container
        └── Multi-language driver verification (Node, Go, Python, C#)
 
-  [ ] Week 2: Modern Authentication & Observability (UPCOMING)
+  [ ] Phase 2: Modern Authentication & Observability (In Progress)
        ├── Native SCRAM-SHA-256 client & backend authentication
        ├── TLS / SSL encryption (frontend client termination & backend SSL)
        ├── Prometheus metrics exporter endpoint (/metrics)
        │    └── Active connections, queue depth, TPS, shedded requests
        └── Structured JSON logging with configurable log levels
 
-  [ ] Week 3: Session Pooling & Operational Controls
+  [ ] Phase 3: Session Pooling & Operational Controls (Planned)
        ├── Session-Level Pooling mode (for stateful legacy applications)
        ├── Query cancellation support (CancelRequest message handling)
        ├── Dynamic runtime reload (SIGHUP configuration reload)
        └── Administrative management console (PAUSE, RESUME, RELOAD, KILL)
 
-  [ ] Week 4: Multi-Tenancy & Edge Routing
+  [ ] Phase 4: Multi-Tenancy & Edge Routing (Planned)
        ├── Dynamic multi-database / multi-user routing
        ├── Automatic read/write query splitting for read replicas
        └── Health check and circuit breaker failover for replicas
