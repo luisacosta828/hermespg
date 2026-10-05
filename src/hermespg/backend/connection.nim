@@ -128,11 +128,13 @@ proc connectBackend*(host: string, port: Port, user, password, database: string,
       else:
         raise newException(ValueError, fmt"Unsupported authentication mechanism: {authType}")
     of MsgParameterStatus:
-      # Store session parameters
+      # Store session parameters (key\0val\0)
       let nullPos = msg.payload.find('\0')
-      if nullPos != -1:
+      if nullPos != -1 and nullPos + 1 < msg.payload.len:
         let key = msg.payload[0 ..< nullPos]
-        let val = msg.payload[nullPos + 1 .. ^2]
+        let rest = msg.payload[nullPos + 1 .. ^1]
+        let secondNull = rest.find('\0')
+        let val = if secondNull != -1: rest[0 ..< secondNull] else: rest
         conn.parameters[key] = val
     of MsgBackendKeyData:
       if msg.payload.len >= 8:

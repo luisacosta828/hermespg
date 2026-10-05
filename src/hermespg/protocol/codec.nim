@@ -4,7 +4,8 @@ import ./messages
 
 proc readInt32BE*(data: string, offset = 0): int32 =
   ## Reads a 32-bit signed big-endian integer from a string buffer
-  assert offset + 4 <= data.len, "Buffer underflow reading int32"
+  if offset < 0 or offset + 4 > data.len:
+    raise newException(ValueError, "Buffer underflow reading int32")
   bigEndian32(addr result, unsafeAddr data[offset])
 
 proc writeInt32BE*(val: int32): string =
@@ -15,7 +16,8 @@ proc writeInt32BE*(val: int32): string =
 
 proc readInt16BE*(data: string, offset = 0): int16 =
   ## Reads a 16-bit signed big-endian integer from a string buffer
-  assert offset + 2 <= data.len, "Buffer underflow reading int16"
+  if offset < 0 or offset + 2 > data.len:
+    raise newException(ValueError, "Buffer underflow reading int16")
   bigEndian16(addr result, unsafeAddr data[offset])
 
 proc writeInt16BE*(val: int16): string =
