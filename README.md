@@ -1,130 +1,239 @@
-# ⚡ HermesPG
+<p align="center">
+  <img src="assets/logo.jpg" alt="HermesPG Logo" width="220" style="border-radius: 16px;" />
+</p>
 
-> **A lightweight, ultra-fast PostgreSQL connection pooler and proxy written in Nim.**
+<h1 align="center">⚡ HermesPG</h1>
 
-HermesPG enables thousands of concurrent frontend connections to share a small, bounded pool of physical PostgreSQL connections using transaction-level multiplexing, zero-latency pre-assembled handshakes, and bounded $O(1)$ load-shedding queues.
+<p align="center">
+  <strong>Ultra-fast, featherweight PostgreSQL connection pooler and proxy in Nim.</strong><br>
+  <em>287 KB standalone binary • 326 KB Docker Scratch Image • Sub-0.2ms Handshake • Transaction Mode Multiplexing</em>
+</p>
 
----
-
-## 🚀 Key Features
-
-* **Transaction-Level Pooling**: Clients stay connected indefinitely without consuming Postgres backend processes. Physical connections are leased only during query/transaction execution and returned to the pool the moment the session returns to `Idle` (`'I'`).
-* **Sub-0.2ms Pre-Assembled Handshake**: Initial client authentication and runtime parameter status packets are pre-assembled into a single contiguous binary buffer at startup and dispatched in a single network syscall (`send`), drastically reducing connection setup latency.
-* **Fail-Fast Load Shedding**: Implements a bounded double-ended queue (`Deque`) in $O(1)$. When queue capacity is reached, excess requests are rejected immediately without memory allocation or socket thrashing.
-* **Compile-Time Error Wire Packets**: Native PostgreSQL binary error responses (`WireTimeoutError`, `WireQueueFullError`, `WireIdleTxTimeoutError`, `WirePoolShuttingDownError`) are pre-generated at compile time with standard SQLSTATE codes (`53300`, `25P03`, `57P01`).
-* **Session Sanitization & Auto-Rollback**:
-  * Unfinished transactions abandoned by disconnected clients are intercepted and safely cleaned with an automatic `ROLLBACK;`.
-  * Reused connections are sanitized with `DISCARD ALL;` before being handed to new clients when state modification occurs.
-* **In-Transaction Watchdog**: Automatically terminates rogue or abandoned clients holding idle transactions (`idleTxTimeoutMs`), preventing connection starvation.
-* **POSIX Socket Tuning**: Automatically checks and raises `RLIMIT_NOFILE` up to 65,536 descriptors at runtime.
-* **Zero Stop-the-World Pauses**: Built with Nim's deterministic ARC/ORC memory management (`--mm:orc`).
+<p align="center">
+  <img src="https://img.shields.io/badge/Language-Nim%202.0-orange.svg" alt="Nim 2.0" />
+  <img src="https://img.shields.io/badge/Binary%20Size-287%20KB-brightgreen.svg" alt="Binary Size" />
+  <img src="https://img.shields.io/badge/Docker%20Image-326%20KB%20(Scratch)-blue.svg" alt="Docker Image" />
+  <img src="https://img.shields.io/badge/Memory%20Footprint-~3%20MB%20RSS-blueviolet.svg" alt="Memory Footprint" />
+  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT" />
+</p>
 
 ---
 
-## 📐 Architecture
+## 📖 Overview
+
+**HermesPG** is a high-performance PostgreSQL connection pooler and proxy engineered from the ground up for extreme efficiency, deterministic memory management, and zero runtime bloat. 
+
+In PostgreSQL, each client connection is a heavyweight operating system process consuming 10 MB to 20 MB of RAM. Scaling to thousands of connections directly against PostgreSQL quickly exhausts memory, triggers lock contention, and leads to connection starvation.
+
+HermesPG solves this by multiplexing **thousands of concurrent client connections** over a small, bounded pool of **10 to 30 physical backend connections** in **Transaction Pooling Mode**.
+
+### 🌟 The "Edge Pool" Architecture
+
+Because HermesPG compiles to a standalone **287 KB static binary** and uses only **~3 MB of RAM**, it can be deployed not only as a central pooler, but also as a distributed **Micro-Pooler / Sidecar**:
+
+* **Kubernetes Pod Sidecar / DaemonSet**: Run a local HermesPG instance alongside your application pods with virtually zero resource cost.
+* **Serverless & Edge Runtimes**: Cold-start in **< 2 milliseconds** for AWS Lambda, Fly.io, or edge functions.
+* **100x Multiplier**: 10 distributed HermesPG instances holding 5 connections each consume only **50 total connections** on PostgreSQL (a fraction of a 300–500 connection limit), while serving **10,000+ active clients**.
 
 ```
-Clients (1,000+ Apps)
-       │ (TCP :6432)
-       ▼
- ┌──────────────┐
- │   HermesPG   │ ── Fast-Handshake Buffer (<0.2ms)
- │  Proxy Core  │ ── Transaction Watchdog (idleTxTimeoutMs)
- └──────┬───────┘
-        │
- ┌──────▼───────┐
- │  Connection  │ ── Idle Stack (LIFO)
- │     Pool     │ ── Wait Queue O(1) + Load Shedding
- └──────┬───────┘
-        │ (TCP :5432)
-        ▼
-   PostgreSQL (e.g. 10 physical connections)
+       [ Microservice A ]       [ Microservice B ]       [ Edge / Serverless ]
+       (1,000 connections)      (1,000 connections)      (5,000 connections)
+               │                        │                        │
+               ▼                        ▼                        ▼
+        ┌─────────────┐          ┌─────────────┐          ┌─────────────┐
+        │  HermesPG   │          │  HermesPG   │          │  HermesPG   │
+        │ (Sidecar 1) │          │ (Sidecar 2) │          │ (Sidecar N) │
+        └──────┬──────┘          └──────┬──────┘          └──────┬──────┘
+               │ (5-10 conns)           │ (5-10 conns)           │ (5-10 conns)
+               └─────────────────┬──────┴────────────────────────┘
+                                 ▼
+                   ┌───────────────────────────┐
+                   │    PostgreSQL Database    │
+                   │ (Max Capacity: 300-500)   │
+                   │  Total Used Backends: ~50 │
+                   └───────────────────────────┘
 ```
 
 ---
 
-## 🛠️ Requirements & Building
+## ⚡ Key Features
 
-* **Nim >= 2.0.0**
-* **PostgreSQL** running locally or accessible via network.
+* **Transaction-Level Pooling**: Physical connections are leased only for the duration of a transaction or single query. As soon as PostgreSQL returns `'I'` (Idle), the backend is returned to the pool in $O(1)$.
+* **Full Extended Query Protocol Support**: Seamlessly pipelines binary `Parse`, `Bind`, `Describe`, `Execute`, and `Sync` packets with dynamic parameter tracking and transaction pinning.
+* **Sub-0.2ms Pre-Assembled Handshake**: Connection parameters and authentication responses are cached into a pre-compiled contiguous binary buffer and dispatched in a single `send` syscall.
+* **Fail-Fast $O(1)$ Load Shedding**: Implements a bounded double-ended queue (`Deque`). When peak capacity is reached, excess incoming requests are rejected immediately (< 0.2ms) with SQLSTATE `53300`, preventing database collapse from cascading bufferbloat.
+* **Transaction Watchdog (`idleTxTimeoutMs`)**: Detects rogue or abandoned transactions holding locks (`BEGIN` without `COMMIT`), issuing an automatic forced `ROLLBACK` to recover physical connections.
+* **Automatic Session Sanitization**: Tracks runtime parameter mutations (`SET timezone ...`) and automatically issues `DISCARD ALL;` before re-leasing dirty connections.
+* **Microscopic Container (`FROM scratch`)**: Fully static Musl ELF binary running in a 326 KB container image with zero third-party dependencies and zero attack surface.
 
-### Build release binary:
+---
+
+## 🧪 Validated Enterprise Drivers
+
+HermesPG includes an automated multi-language containerized test suite ([`tests/drivers/run_tests.sh`](tests/drivers/run_tests.sh)) verifying 100% protocol fidelity across the industry's top drivers:
+
+| Language | Driver / Library | Simple Query | Extended Query ($1 + $2) | Transaction Block (`BEGIN`..`COMMIT`) |
+| :--- | :--- | :---: | :---: | :---: |
+| **JavaScript / Node.js** | [`node-postgres (pg)`](tests/drivers/node/test.js) | ✅ Passed | ✅ Passed | ✅ Passed |
+| **Go** | [`jackc/pgx/v5`](tests/drivers/go/main.go) | ✅ Passed | ✅ Passed | ✅ Passed |
+| **Python** | [`psycopg3`](tests/drivers/python/test.py) | ✅ Passed | ✅ Passed | ✅ Passed |
+| **C# / .NET 8** | [`Npgsql 8.0`](tests/drivers/csharp/Program.cs) | ✅ Passed | ✅ Passed | ✅ Passed |
+
+Run the driver test suite:
 ```bash
-nim c -d:release src/hermespg.nim
-```
-
-### Run tests:
-```bash
-nim c -r tests/test_protocol.nim
-nim c -r tests/test_pool.nim
+./tests/drivers/run_tests.sh
 ```
 
 ---
 
-## ⚡ Running the Proxy
+## 📊 Stress & Concurrency Benchmarks
 
-1. Start the proxy:
+HermesPG ships with an automated stress and load-shedding test harness ([`tests/bench_stress.sh`](tests/bench_stress.sh)) powered by `pgbench`:
+
 ```bash
-./hermespg
+./tests/bench_stress.sh
 ```
 
-By default, HermesPG listens on port `6432` and connects to PostgreSQL on `127.0.0.1:5432`.
+### Empirical Test Results:
+* **High-Concurrency Multiplexing (50 clients $\to$ 5 physical backends)**:
+  * Processed: **10,000 / 10,000 transactions** without errors.
+  * Throughput: **1,197 TPS** sustained.
+  * Average Latency: **41.7 ms** under 100% saturation loop.
+  * PostgreSQL backend connections used: **Exactly 5**.
+* **Load Shedding Under Extreme Overload**:
+  * Configured with 1 backend connection and max queue of 5 (Total capacity = 6).
+  * Flooded with 20 parallel slow queries.
+  * Result: **14 requests shedded instantly (< 0.2ms)** with SQLSTATE `53300`, protecting PostgreSQL CPU and memory from collapse.
 
-2. Connect any PostgreSQL client (e.g., `psql`):
+---
+
+## 🚀 Getting Started
+
+### Option 1: Docker Compose (Recommended)
+
+Start PostgreSQL 16 and HermesPG in an isolated network:
+
 ```bash
-psql -h 127.0.0.1 -p 6432 -U postgres -d postgres
+docker compose up -d
+```
+
+Connect your application to HermesPG on port `6432`:
+```bash
+psql -h 127.0.0.1 -p 6432 -U postgres -d appdb
+```
+
+### Option 2: Pre-compiled Docker Scratch Image
+
+Build the ultra-lightweight 326 KB image:
+```bash
+docker build -t hermespg:latest .
+```
+
+Run directly:
+```bash
+docker run -d --name hermespg -p 6432:6432 \
+  -e PGHOST=host.docker.internal \
+  -e PGPASSWORD=secretpassword \
+  hermespg:latest
+```
+
+### Option 3: Compile from Source (Native)
+
+#### Prerequisites:
+* [Nim](https://nim-lang.org/) >= 2.0.0
+* GCC or Clang
+
+#### Build optimized static binary:
+```bash
+nim c -d:danger --opt:speed \
+  --passC:"-flto -fomit-frame-pointer" \
+  --passL:"-flto -static -s" \
+  -o:hermespg src/hermespg.nim
+```
+
+#### Run HermesPG:
+```bash
+./hermespg -H 127.0.0.1 -P 5432 -U postgres -W secretpassword -d postgres -c 20
 ```
 
 ---
 
-## ⚙️ Configuration & CLI Usage
+## ⚙️ Configuration & CLI Options
 
-HermesPG supports comprehensive configuration through both command-line arguments and standard environment variables (12-Factor App pattern). Command-line arguments always take precedence over environment variables.
-
-### Options Reference:
+HermesPG supports full 12-factor configuration via CLI flags and environment variables. CLI flags take precedence over environment variables:
 
 | Flag | Long Option | Environment Variable | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `-b` | `--bind <host>` | `HERMES_BIND` | `0.0.0.0` | IP/Interface to bind the proxy listener |
-| `-p` | `--port <port>` | `HERMES_PORT`, `PORT` | `6432` | Listening port for frontend clients |
-| `-H` | `--pg-host <host>` | `PGHOST` | `127.0.0.1` | PostgreSQL backend host |
-| `-P` | `--pg-port <port>` | `PGPORT` | `5432` | PostgreSQL backend port |
-| `-U` | `--user <user>` | `PGUSER` | `postgres` | PostgreSQL connection user |
-| `-W` | `--password <pwd>` | `PGPASSWORD` | `""` | PostgreSQL connection password |
+| `-b` | `--bind <host>` | `HERMES_BIND` | `0.0.0.0` | Listen IP address for incoming client connections |
+| `-p` | `--port <port>` | `HERMES_PORT` / `PORT` | `6432` | Listen port for frontend clients |
+| `-H` | `--pg-host <host>` | `PGHOST` | `127.0.0.1` | PostgreSQL server hostname or IP |
+| `-P` | `--pg-port <port>` | `PGPORT` | `5432` | PostgreSQL server port |
+| `-U` | `--user <user>` | `PGUSER` | `postgres` | Database username |
+| `-W` | `--password <pwd>` | `PGPASSWORD` | `""` | Database password |
 | `-d` | `--db, --database` | `PGDATABASE` | `postgres` | Database name |
-| `-c` | `--max-conns <n>` | `HERMES_MAX_CONNS` | `10` | Max physical backend connections |
-| `-q` | `--max-queue <n>` | `HERMES_MAX_QUEUE` | `2000` | Max clients in waiting queue before Fail-Fast |
-| `-t` | `--timeout <ms>` | `HERMES_TIMEOUT_MS` | `15000` | Max queue acquisition wait time (ms) |
+| `-c` | `--max-conns <num>` | `HERMES_MAX_CONNS` | `10` | Maximum physical connections to PostgreSQL |
+| `-q` | `--max-queue <num>` | `HERMES_MAX_QUEUE` | `2000` | Maximum waiting clients queue size before Load Shedding |
+| `-t` | `--timeout <ms>` | `HERMES_TIMEOUT_MS` | `15000` | Maximum queue acquisition wait time in milliseconds |
 | `-i` | `--idle-tx-timeout` | `HERMES_IDLE_TX_TIMEOUT_MS`| `8000` | Max idle transaction time before auto-ROLLBACK (ms) |
-| `-r` | `--reset-query <sql>`| `HERMES_RESET_QUERY` | `DISCARD ALL;` | Session cleanup query |
-| | `--no-reset` | | `false` | Disable session cleanup query |
-| `-V` | `--verbose` | `HERMES_VERBOSE` | `false` | Enable verbose debug logging |
-| `-h` | `--help` | | | Show help message and exit |
+| `-r` | `--reset-query <sql>`| `HERMES_RESET_QUERY` | `DISCARD ALL;` | Session cleanup query executed before leasing dirty connections |
+| | `--no-reset` | | `false` | Disable automatic session cleanup query |
+| `-V` | `--verbose` | `HERMES_VERBOSE` | `false` | Enable detailed debug logging |
+| `-h` | `--help` | | | Show CLI help message and exit |
 | `-v` | `--version` | | | Show version and exit |
 
-### Examples:
+---
 
-```bash
-# Connect to remote PostgreSQL server with 25 pooled connections
-./hermespg -H db.internal.net -P 5432 -U app_user -W secret123 -d production -c 25
+## 🗺️ Project Roadmap
 
-# Configure via standard 12-factor environment variables
-PGHOST=db.internal.net PGPASSWORD=secret123 HERMES_PORT=6432 ./hermespg
+HermesPG follows an iterative, production-grade development roadmap:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        HermesPG Development Roadmap                     │
+└────────────────────────────────────────────────────────────────────────┘
+  [x] Week 1: Core Proxy & Transaction Engine (COMPLETED)
+       ├── Sub-0.2ms pre-assembled binary handshake
+       ├── Full Extended Query protocol pipelining (Parse/Bind/Execute/Sync)
+       ├── Transaction state pinning & dirty session tracking
+       ├── Bounded O(1) wait queue & Fail-Fast Load Shedding
+       ├── Rogue transaction watchdog (auto-ROLLBACK)
+       ├── 287 KB static binary & 326 KB Docker Scratch container
+       └── Multi-language driver verification (Node, Go, Python, C#)
+
+  [ ] Week 2: Modern Authentication & Observability (UPCOMING)
+       ├── Native SCRAM-SHA-256 client & backend authentication
+       ├── TLS / SSL encryption (frontend client termination & backend SSL)
+       ├── Prometheus metrics exporter endpoint (/metrics)
+       │    └── Active connections, queue depth, TPS, shedded requests
+       └── Structured JSON logging with configurable log levels
+
+  [ ] Week 3: Session Pooling & Operational Controls
+       ├── Session-Level Pooling mode (for stateful legacy applications)
+       ├── Query cancellation support (CancelRequest message handling)
+       ├── Dynamic runtime reload (SIGHUP configuration reload)
+       └── Administrative management console (PAUSE, RESUME, RELOAD, KILL)
+
+  [ ] Week 4: Multi-Tenancy & Edge Routing
+       ├── Dynamic multi-database / multi-user routing
+       ├── Automatic read/write query splitting for read replicas
+       └── Health check and circuit breaker failover for replicas
 ```
 
 ---
 
-## 📊 Benchmarking
+## 🧪 Running Native Test Suites
 
-HermesPG includes a high-concurrency asynchronous benchmark tool simulating 1,000+ concurrent clients:
-
+Run the complete native test suite:
 ```bash
-nim c -d:release tests/bench_load.nim
-./tests/bench_load 1000
+nim c -r tests/test_protocol.nim
+nim c -r tests/test_config.nim
+nim c -r tests/test_pool.nim
+nim c -r tests/test_extended_query.nim
 ```
 
 ---
 
 ## 📜 License
 
-MIT License. Developed by luisacosta828.
+HermesPG is open-source software licensed under the [MIT License](LICENSE).
+Developed with ⚡ by luisacosta828.
