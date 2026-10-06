@@ -1,5 +1,5 @@
 # Package
-version       = "0.1.1"
+version       = "0.1.2"
 author        = "luisacosta828"
 description   = "HermesPG - A lightweight, ultra-fast PostgreSQL connection pooler and proxy in Nim"
 license       = "MIT"

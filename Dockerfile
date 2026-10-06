@@ -16,9 +16,10 @@ COPY src/ ./src/
 # -d:danger: Disables all runtime assertions and stack traces for max throughput
 # --opt:speed: Maximum GCC optimization (-O3)
 # -flto: Link-Time Optimization across all compilation units
+# -ffunction-sections -fdata-sections -Wl,--gc-sections: Discard unused functions and variables
 # -static: Fully static ELF binary (no dynamic glibc/musl runtime dependencies)
 # -s: Strip all debug symbols for minimal binary size
-RUN nim c -d:danger --opt:speed --passC:"-flto -fomit-frame-pointer" --passL:"-flto -static -s" -o:/app/hermespg src/hermespg.nim
+RUN nim c -d:danger --opt:speed --passC:"-flto -fomit-frame-pointer -ffunction-sections -fdata-sections" --passL:"-flto -static -s -Wl,--gc-sections" -o:/app/hermespg src/hermespg.nim
 
 # --- Stage 2: Minimal scratch runtime ---
 FROM scratch

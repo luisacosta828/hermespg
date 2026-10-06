@@ -1,38 +1,50 @@
 ## Autonomous PostgreSQL backend connection managed by the Pool
-import std/[asyncnet, asyncdispatch, tables, strutils, strformat, md5]
+import std/[asyncnet, asyncdispatch, tables, strutils, strformat, md5, nativesockets, posix]
 import ../protocol/[messages, codec]
 
 type
   BackendConn* = ref object
+    # Hot cache line fields accessed during query leasing/dispatch (within first 64 bytes)
     socket*: AsyncSocket
     id*: int
+    isAlive*: bool
+    isDirty*: bool
     inTransaction*: bool
     lastStatus*: TransactionStatus
     backendPid*: int32
     secretKey*: int32
+    # Cold fields accessed rarely outside handshake
     parameters*: Table[string, string]
-    isAlive*: bool
-    isDirty*: bool  ## Indicates whether the connection was used and requires session cleanup
 
 proc newBackendConn*(id: int): BackendConn =
   BackendConn(
     socket: nil,
     id: id,
+    isAlive: false,
+    isDirty: false,
     inTransaction: false,
     lastStatus: Idle,
     backendPid: 0,
     secretKey: 0,
-    parameters: initTable[string, string](),
-    isAlive: false,
-    isDirty: false
+    parameters: initTable[string, string]()
   )
 
-proc toTransactionStatus*(c: char): TransactionStatus =
+proc toTransactionStatus*(c: char): TransactionStatus {.inline.} =
   case c
   of 'I': Idle
   of 'T': InTransaction
   of 'E': FailedTransaction
   else: Idle
+
+proc optimizeSocket*(socket: AsyncSocket) {.inline.} =
+  ## Enables TCP_NODELAY (disables Nagle algorithm) and SO_KEEPALIVE for microsecond network latency
+  try:
+    let fd = socket.getFd()
+    var optOne: cint = 1
+    discard setsockopt(fd, posix.IPPROTO_TCP, posix.TCP_NODELAY, addr optOne, SockLen(sizeof(optOne)))
+    discard setsockopt(fd, posix.SOL_SOCKET, posix.SO_KEEPALIVE, addr optOne, SockLen(sizeof(optOne)))
+  except CatchableError:
+    discard
 
 proc executeSimple*(conn: BackendConn, sql: string): Future[bool] {.async.} =
   ## Executes a simple query synchronously on backend (useful for DISCARD ALL, ping, etc.)
@@ -72,6 +84,7 @@ proc connectBackend*(host: string, port: Port, user, password, database: string,
   conn.socket = newAsyncSocket(buffered = false)
 
   await conn.socket.connect(host, port)
+  optimizeSocket(conn.socket)
 
   # Build StartupMessage
   var payload = writeInt32BE(ProtocolVersion30)

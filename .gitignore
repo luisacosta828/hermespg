@@ -10,6 +10,7 @@ nimcache/
 /tests/test_extended_query
 /tests/bench_load
 *.out
+testresults/
 
 # Editor and temporary files
 .vscode/

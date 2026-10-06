@@ -46,6 +46,7 @@ proc assemblePrebuiltHandshake(params: Table[string, string]): string =
   return buf
 
 proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: ConnectionPool, verbose: bool): Future[void] {.async.} =
+  optimizeSocket(clientSock)
   # 1. Initial client handshake
   var initMsg = await clientSock.readStartupOrSsl()
   if initMsg.length == 0:
@@ -123,7 +124,8 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
 
         # Forward initial command that triggered lease
         if clientMsg.kind == MsgParse:
-          leasedConn.isDirty = true
+          if clientMsg.payload.len > 0 and clientMsg.payload[0] != '\0':
+            leasedConn.isDirty = true
         await leasedConn.socket.writeMessage(clientMsg)
 
       # Phase 2: Active turn with leased backend (supports Simple & Extended Query pipelining)
@@ -162,7 +164,8 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
             break
 
           if cMsg.kind == MsgParse:
-            leasedConn.isDirty = true
+            if cMsg.payload.len > 0 and cMsg.payload[0] != '\0':
+              leasedConn.isDirty = true
 
           await leasedConn.socket.writeMessage(cMsg)
 

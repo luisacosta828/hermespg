@@ -1,4 +1,5 @@
-# Configuración global del proyecto Nim
+# Global Nim project configuration
 switch("path", "src")
 switch("mm", "orc")
-switch("threads", "on")
+switch("threads", "off")
+switch("panics", "on")

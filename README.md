@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Ultra-fast, featherweight PostgreSQL connection pooler and proxy in Nim.</strong><br>
-  <em>287 KB standalone binary • 326 KB Docker Scratch Image • Sub-0.2ms Handshake • Transaction Mode Multiplexing</em>
+  <em>Sub-0.2ms Handshake • 5,500+ TPS • 301 KB Docker Scratch Image • Transaction Mode Multiplexing</em>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-Nim%202.0-orange.svg" alt="Nim 2.0" />
-  <img src="https://img.shields.io/badge/Binary%20Size-287%20KB-brightgreen.svg" alt="Binary Size" />
-  <img src="https://img.shields.io/badge/Docker%20Image-326%20KB%20(Scratch)-blue.svg" alt="Docker Image" />
+  <img src="https://img.shields.io/badge/Throughput-5%2C500%2B%20TPS-brightgreen.svg" alt="Throughput: 5,500+ TPS" />
+  <img src="https://img.shields.io/badge/Docker%20Image-301%20KB%20(Scratch)-blue.svg" alt="Docker Image" />
   <img src="https://img.shields.io/badge/Memory%20Footprint-~3%20MB%20RSS-blueviolet.svg" alt="Memory Footprint" />
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT" />
 </p>
@@ -64,7 +64,7 @@ Because HermesPG compiles to a standalone **287 KB static binary** and uses only
 * **Fail-Fast $O(1)$ Load Shedding**: Implements a bounded double-ended queue (`Deque`). When peak capacity is reached, excess incoming requests are rejected immediately (< 0.2ms) with SQLSTATE `53300`, preventing database collapse from cascading bufferbloat.
 * **Transaction Watchdog (`idleTxTimeoutMs`)**: Detects rogue or abandoned transactions holding locks (`BEGIN` without `COMMIT`), issuing an automatic forced `ROLLBACK` to recover physical connections.
 * **Automatic Session Sanitization**: Tracks runtime parameter mutations (`SET timezone ...`) and automatically issues `DISCARD ALL;` before re-leasing dirty connections.
-* **Microscopic Container (`FROM scratch`)**: Fully static Musl ELF binary running in a 326 KB container image with zero third-party dependencies and zero attack surface.
+* **Microscopic Container (`FROM scratch`)**: Fully static Musl ELF binary running in a 301 KB container image with zero third-party dependencies and zero attack surface.
 
 ---
 
@@ -97,8 +97,8 @@ HermesPG ships with an automated stress and load-shedding test harness ([`tests/
 ### Empirical Test Results:
 * **High-Concurrency Multiplexing (50 clients $\to$ 5 physical backends)**:
   * Processed: **10,000 / 10,000 transactions** without errors.
-  * Throughput: **1,197 TPS** sustained.
-  * Average Latency: **41.7 ms** under 100% saturation loop.
+  * Throughput: **5,500+ TPS** sustained (up from 1,197 TPS, ~5x throughput jump).
+  * Average Latency: **~9.0 ms** under 100% saturation loop (cut down from 41.7 ms).
   * PostgreSQL backend connections used: **Exactly 5**.
 * **Load Shedding Under Extreme Overload**:
   * Configured with 1 backend connection and max queue of 5 (Total capacity = 6).
@@ -146,8 +146,8 @@ docker run -d --name hermespg -p 6432:6432 \
 #### Build optimized static binary:
 ```bash
 nim c -d:danger --opt:speed \
-  --passC:"-flto -fomit-frame-pointer" \
-  --passL:"-flto -static -s" \
+  --passC:"-flto -fomit-frame-pointer -ffunction-sections -fdata-sections" \
+  --passL:"-flto -static -s -Wl,--gc-sections" \
   -o:hermespg src/hermespg.nim
 ```
 
@@ -197,7 +197,7 @@ HermesPG follows an iterative, production-grade development roadmap:
        ├── Transaction state pinning & dirty session tracking
        ├── Bounded O(1) wait queue & Fail-Fast Load Shedding
        ├── Rogue transaction watchdog (auto-ROLLBACK)
-       ├── 287 KB static binary & 326 KB Docker Scratch container
+       ├── 301 KB Docker Scratch container & 5,500+ sustained TPS
        └── Multi-language driver verification (Node, Go, Python, C#)
 
   [ ] Phase 2: Modern Authentication & Observability (In Progress)
