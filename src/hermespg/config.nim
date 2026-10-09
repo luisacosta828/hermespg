@@ -4,7 +4,7 @@ import ./backend/pool
 import ./proxy
 
 const
-  HermesVersion* = "0.1.2"
+  HermesVersion* = "0.1.3"
   DefaultListenAddress* = "0.0.0.0"
   DefaultListenPort* = Port(6432)
   DefaultPgHost* = "127.0.0.1"
@@ -19,6 +19,7 @@ const
   DefaultResetQuery* = "DISCARD ALL;"
   DefaultResetBeforeFirstQuery* = true
   DefaultVerbose* = false
+  DefaultWorkers* = 1
 
 proc showVersion*() =
   echo fmt"HermesPG v{HermesVersion} - High-Performance PostgreSQL Connection Pooler & Proxy in Nim"
@@ -34,6 +35,7 @@ USAGE:
 PROXY SERVER OPTIONS:
   -b, --bind <host>             Listen IP address (default: 0.0.0.0, env: HERMES_BIND)
   -p, --port <port>             Listen port for frontend clients (default: 6432, env: HERMES_PORT or PORT)
+  -w, --workers <num>           Number of native worker threads with SO_REUSEPORT (default: 1, env: HERMES_WORKERS)
   -V, --verbose                 Enable detailed debug logging (default: false, env: HERMES_VERBOSE)
 
 POSTGRESQL BACKEND OPTIONS:
@@ -116,6 +118,7 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
   var idleTxTimeoutMs = parsePositiveIntValue(getEnv("HERMES_IDLE_TX_TIMEOUT_MS", $DefaultIdleTxTimeoutMs), "HERMES_IDLE_TX_TIMEOUT_MS")
   var resetQuery = getEnv("HERMES_RESET_QUERY", DefaultResetQuery)
   var resetBeforeFirstQuery = DefaultResetBeforeFirstQuery
+  var workers = parsePositiveIntValue(getEnv("HERMES_WORKERS", $DefaultWorkers), "HERMES_WORKERS")
 
   # Parse command-line options
   var p = initOptParser(cmdParams)
@@ -136,6 +139,8 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
         listenAddress = p.fetchVal("--bind")
       of "p", "port":
         listenPort = parsePortValue(p.fetchVal("--port"), "--port")
+      of "w", "workers":
+        workers = parsePositiveIntValue(p.fetchVal("--workers"), "--workers")
       of "H", "pg-host":
         pgHost = p.fetchVal("--pg-host")
       of "P", "pg-port":
@@ -183,5 +188,6 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
     listenAddress: listenAddress,
     listenPort: listenPort,
     poolSettings: poolSettings,
-    verbose: verbose
+    verbose: verbose,
+    workers: workers
   )

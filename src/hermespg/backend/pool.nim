@@ -51,6 +51,43 @@ proc newConnectionPool*(settings: PoolSettings): ConnectionPool =
     nextConnId: 1
   )
 
+proc prewarm*(pool: ConnectionPool): Future[void] {.async.} =
+  ## Pre-establishes all configured backend connections to PostgreSQL up-front.
+  ## Eliminates connection creation latency during initial client surges.
+  while pool.activeCount < pool.settings.maxConnections:
+    let connId = pool.nextConnId
+    inc pool.nextConnId
+    inc pool.activeCount
+    try:
+      let conn = await connectBackend(
+        pool.settings.pgHost,
+        pool.settings.pgPort,
+        pool.settings.user,
+        pool.settings.password,
+        pool.settings.database,
+        connId
+      )
+      pool.idleConns.add(conn)
+    except CatchableError as e:
+      dec pool.activeCount
+      raise e
+
+proc tryAcquireFast*(pool: ConnectionPool, conn: var BackendConn): bool {.inline.} =
+  ## Zero-allocation synchronous acquisition fast path when an idle clean connection is ready.
+  ## Avoids Future[AcquireResult] allocation and async event loop hops on cache hit.
+  if pool.isShuttingDown:
+    return false
+
+  while pool.idleConns.len > 0:
+    let c = pool.idleConns.pop()
+    if c.isAlive and not c.socket.isClosed and not c.isDirty:
+      conn = c
+      return true
+    else:
+      dec pool.activeCount
+
+  return false
+
 proc acquire*(pool: ConnectionPool): Future[AcquireResult] {.async.} =
   if pool.isShuttingDown:
     return AcquireResult(status: AcquireShuttingDown, conn: nil)
@@ -110,6 +147,20 @@ proc acquire*(pool: ConnectionPool): Future[AcquireResult] {.async.} =
     return AcquireResult(status: AcquireShuttingDown, conn: nil)
 
   return AcquireResult(status: AcquireOk, conn: pending.fut.read())
+
+proc releaseFast*(pool: ConnectionPool, conn: BackendConn) {.inline.} =
+  ## Zero-allocation synchronous release fast path for idle clean connections.
+  ## Avoids Future[void] allocation and dispatcher ticks when no cleanup/queuing is pending.
+  if conn == nil or not conn.isAlive or conn.socket.isClosed:
+    return
+
+  while pool.waitQueue.len > 0:
+    let nextClient = pool.waitQueue.popFirst()
+    if not nextClient.isCancelled and not nextClient.fut.finished:
+      nextClient.fut.complete(conn)
+      return
+
+  pool.idleConns.add(conn)
 
 proc release*(pool: ConnectionPool, conn: BackendConn, dirty = false) {.async.} =
   if conn == nil:

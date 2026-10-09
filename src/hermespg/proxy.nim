@@ -1,4 +1,4 @@
-import std/[asyncnet, asyncdispatch, strutils, strformat, tables]
+import std/[asyncnet, asyncdispatch, strutils, strformat, tables, posix, nativesockets]
 import ./protocol/[messages, codec]
 import ./backend/[connection, pool]
 
@@ -8,13 +8,12 @@ type
     listenPort*: Port
     poolSettings*: PoolSettings
     verbose*: bool
+    workers*: int
 
 var
-  shutdownRequested* = false
-  shutdownFuture*: Future[void]
-
-  # Pre-assembled handshake in a single binary buffer for microsecond dispatch
-  prebuiltHandshake*: string
+  shutdownRequested* {.threadvar.}: bool
+  shutdownFuture* {.threadvar.}: Future[void]
+  prebuiltHandshake* {.threadvar.}: string
 
 proc assemblePrebuiltHandshake(params: Table[string, string]): string =
   ## Combines AuthenticationOk, all ParameterStatus, BackendKeyData, and ReadyForQuery
@@ -45,171 +44,192 @@ proc assemblePrebuiltHandshake(params: Table[string, string]): string =
   buf.add(encode(PgMessage(kind: MsgReadyForQuery, length: 5, payload: "I")))
   return buf
 
+const
+  WireReadyIdle* = "\x5a\x00\x00\x00\x05I" # ReadyForQuery ('Z', 5, 'I')
+
+proc forwardBackendTurn*(leasedConn: BackendConn, clientSock: AsyncSocket, backendBuf: PacketBuffer): Future[bool] {.async.} =
+  ## Streams backend response chunks directly to client socket with speculative direct syscalls.
+  ## Inspects PostgreSQL v3 framing to detect MsgReadyForQuery ('Z') and determine transaction state.
+  var turnCompleted = false
+  var neededPayload = 0
+  var partialHeaderLen = 0
+  var partialHeader: array[5, char]
+
+  while not turnCompleted:
+    # 1. Speculatively read available bytes directly from backend socket
+    var n = fastRecvDirect(leasedConn.socket, addr backendBuf.data[0], backendBuf.data.len)
+    if n < 0:
+      n = await leasedConn.socket.recvInto(addr backendBuf.data[0], backendBuf.data.len)
+      if n == 0:
+        leasedConn.isAlive = false
+        return false
+    elif n == 0:
+      leasedConn.isAlive = false
+      return false
+
+    # 2. Speculatively transmit entire chunk directly to client socket in a single syscall
+    if not fastSendDirect(clientSock, addr backendBuf.data[0], n):
+      await clientSock.send(addr backendBuf.data[0], n)
+
+    # 3. Parse framing within this chunk to detect ReadyForQuery
+    var offset = 0
+    while offset < n:
+      if neededPayload > 0:
+        let take = min(neededPayload, n - offset)
+        neededPayload.dec(take)
+        offset.inc(take)
+        continue
+
+      if partialHeaderLen > 0:
+        let take = min(5 - partialHeaderLen, n - offset)
+        copyMem(addr partialHeader[partialHeaderLen], addr backendBuf.data[offset], take)
+        partialHeaderLen.inc(take)
+        offset.inc(take)
+        if partialHeaderLen == 5:
+          let kind = partialHeader[0]
+          let totalLen = readInt32BE(partialHeader, 1)
+          let payloadLen = int(totalLen) - 4
+          partialHeaderLen = 0
+
+          if kind == MsgParameterStatus:
+            leasedConn.isDirty = true
+          elif kind == MsgReadyForQuery:
+            let status = if offset < n: backendBuf.data[offset] else: 'I'
+            leasedConn.lastStatus = toTransactionStatus(status)
+            turnCompleted = true
+            break
+          neededPayload = payloadLen
+        continue
+
+      if offset + 5 <= n:
+        let kind = backendBuf.data[offset]
+        let totalLen = readInt32BE(backendBuf.data, offset + 1)
+        let msgTotal = 1 + int(totalLen)
+
+        if kind == MsgParameterStatus:
+          leasedConn.isDirty = true
+        elif kind == MsgReadyForQuery:
+          let status = if offset + 5 < n: backendBuf.data[offset + 5] else: 'I'
+          leasedConn.lastStatus = toTransactionStatus(status)
+          turnCompleted = true
+          break
+
+        if offset + msgTotal <= n:
+          offset.inc(msgTotal)
+        else:
+          neededPayload = (offset + msgTotal) - n
+          offset = n
+      else:
+        let rem = n - offset
+        copyMem(addr partialHeader[0], addr backendBuf.data[offset], rem)
+        partialHeaderLen = rem
+        offset = n
+
+  return true
+
 proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: ConnectionPool, verbose: bool): Future[void] {.async.} =
   optimizeSocket(clientSock)
+
+  let clientBuf = newPacketBuffer(65536)
+  let backendBuf = newPacketBuffer(65536)
+
   # 1. Initial client handshake
-  var initMsg = await clientSock.readStartupOrSsl()
-  if initMsg.length == 0:
+  let init = await clientSock.readStartupOrSslInto(clientBuf)
+  if init.length == 0:
     clientSock.close()
     return
 
   # If client requests SSL, reply 'N' immediately
-  if initMsg.length == 8 and initMsg.payload.len >= 4:
-    let code = readInt32BE(initMsg.payload, 0)
-    if code == SslRequestCode:
+  if init.protoCode == SslRequestCode:
+    if not fastSendDirect(clientSock, cstring("N"), 1):
       await clientSock.send("N")
-      initMsg = await clientSock.readStartupOrSsl()
-      if initMsg.length == 0:
-        clientSock.close()
-        return
+    let realInit = await clientSock.readStartupOrSslInto(clientBuf)
+    if realInit.length == 0:
+      clientSock.close()
+      return
 
   # Instant dispatch: send pre-assembled handshake in a single network syscall
-  await clientSock.send(prebuiltHandshake)
+  if not fastSendDirect(clientSock, addr prebuiltHandshake[0], prebuiltHandshake.len):
+    await clientSock.send(addr prebuiltHandshake[0], prebuiltHandshake.len)
 
   if verbose:
-    let startup = parseStartupMessage(initMsg.payload)
-    let user = startup.parameters.getOrDefault("user", "postgres")
-    let app = startup.parameters.getOrDefault("application_name", "client")
-    echo fmt"[CLIENT #{clientId}] Connected and authenticated (<0.2ms). User: '{user}', App: '{app}'"
+    echo fmt"[CLIENT #{clientId}] Connected and authenticated (<0.2ms)"
     flushFile(stdout)
 
   var leasedConn: BackendConn = nil
-  var clientReadFut: Future[PgMessage] = nil
 
   try:
     while not clientSock.isClosed and not shutdownRequested:
-      # If no active read future from client, initiate one
-      if clientReadFut == nil:
-        clientReadFut = clientSock.readMessage()
+      # Read client query packet
+      let cMsgLen = await clientSock.readMessageInto(clientBuf)
+      if cMsgLen == 0:
+        break # Client disconnected
 
-      # Phase 1: Client is not holding a leased backend (Idle between queries/transactions)
+      let msgKind = clientBuf.data[0]
+      if msgKind == MsgTerminate:
+        break
+
       if leasedConn == nil:
-        let clientMsg = await clientReadFut
-        clientReadFut = nil
-
-        if clientMsg.length == 0:
-          # Normal client disconnection (EOF)
-          break
-
-        if clientMsg.kind == MsgTerminate:
-          if verbose:
-            echo fmt"[CLIENT #{clientId}] Session closed normally ('X')"
-            flushFile(stdout)
-          break
-
-        # Acquire physical backend connection from pool
-        let acq = await pool.acquire()
-        case acq.status
-        of AcquireOk:
-          leasedConn = acq.conn
-          if verbose:
-            echo fmt"[POOL] Backend #{leasedConn.id} leased to Client #{clientId}"
-            flushFile(stdout)
-        of AcquireQueueFull:
-          await clientSock.send(WireQueueFullError)
-          clientSock.close()
-          return
-        of AcquireTimeout:
-          await clientSock.send(WireTimeoutError)
-          clientSock.close()
-          return
-        of AcquireShuttingDown:
-          await clientSock.send(WirePoolShuttingDownError)
-          clientSock.close()
-          return
-        of AcquireFailed:
-          await clientSock.send(WireQueueFullError)
-          clientSock.close()
-          return
-
-        # Forward initial command that triggered lease
-        if clientMsg.kind == MsgParse:
-          if clientMsg.payload.len > 0 and clientMsg.payload[0] != '\0':
-            leasedConn.isDirty = true
-        await leasedConn.socket.writeMessage(clientMsg)
-
-      # Phase 2: Active turn with leased backend (supports Simple & Extended Query pipelining)
-      var backendReadFut = leasedConn.socket.readMessage()
-
-      while leasedConn != nil and not clientSock.isClosed and not leasedConn.socket.isClosed:
-        if clientReadFut == nil:
-          clientReadFut = clientSock.readMessage()
-
-        var completedTurn = false
-
-        # If client holds an active transaction block, monitor idle transaction timeout
-        if leasedConn.lastStatus != Idle:
-          let raceFut = clientReadFut or backendReadFut
-          let onTime = await withTimeout(raceFut, pool.settings.idleTxTimeoutMs)
-          if not onTime:
-            echo fmt"[SECURITY] Client #{clientId} abandoned idle transaction (>{pool.settings.idleTxTimeoutMs}ms). Rescuing Backend #{leasedConn.id}..."
-            flushFile(stdout)
-            await clientSock.send(WireIdleTxTimeoutError)
+        if not pool.tryAcquireFast(leasedConn):
+          let acq = await pool.acquire()
+          case acq.status
+          of AcquireOk:
+            leasedConn = acq.conn
+          of AcquireQueueFull:
+            await clientSock.send(WireQueueFullError)
+            await clientSock.send(WireReadyIdle)
+            continue
+          of AcquireTimeout:
+            await clientSock.send(WireTimeoutError)
             clientSock.close()
-            discard await leasedConn.executeSimple("ROLLBACK;")
-            await pool.release(leasedConn, dirty = true)
-            leasedConn = nil
             return
-        else:
-          await (clientReadFut or backendReadFut)
-
-        # 1. Forward incoming client messages to backend (pipelining)
-        if clientReadFut.finished:
-          let cMsg = clientReadFut.read()
-          clientReadFut = nil
-
-          if cMsg.length == 0 or cMsg.kind == MsgTerminate:
-            # Client closed socket unexpectedly mid-turn
+          of AcquireShuttingDown, AcquireFailed:
+            await clientSock.send(WireQueueFullError)
             clientSock.close()
+            return
+
+      # If Parse with named statement, mark connection dirty
+      if msgKind == MsgParse and cMsgLen > 5 and clientBuf.data[5] != '\0':
+        leasedConn.isDirty = true
+
+      # Forward first packet to backend
+      if not fastSendDirect(leasedConn.socket, addr clientBuf.data[0], cMsgLen):
+        await leasedConn.socket.send(addr clientBuf.data[0], cMsgLen)
+
+      # If Extended Query (Parse, Bind, Describe, Execute), forward pipeline until Sync ('S')
+      if msgKind in {MsgParse, MsgBind, MsgDescribe, MsgExecute, MsgFlush}:
+        var currentKind = msgKind
+        while currentKind != MsgSync:
+          let nextLen = await clientSock.readMessageInto(clientBuf)
+          if nextLen == 0:
             break
-
-          if cMsg.kind == MsgParse:
-            if cMsg.payload.len > 0 and cMsg.payload[0] != '\0':
-              leasedConn.isDirty = true
-
-          await leasedConn.socket.writeMessage(cMsg)
-
-        # 2. Forward backend responses to client
-        if backendReadFut.finished:
-          let bMsg = backendReadFut.read()
-          if bMsg.length == 0:
-            # Backend died or closed unexpectedly
-            leasedConn.isAlive = false
-            clientSock.close()
-            break
-
-          await clientSock.writeMessage(bMsg)
-
-          if bMsg.kind == MsgParameterStatus:
-            # Runtime session parameter changed (e.g. SET timezone)
+          currentKind = clientBuf.data[0]
+          if currentKind == MsgParse and nextLen > 5 and clientBuf.data[5] != '\0':
             leasedConn.isDirty = true
+          if not fastSendDirect(leasedConn.socket, addr clientBuf.data[0], nextLen):
+            await leasedConn.socket.send(addr clientBuf.data[0], nextLen)
 
-          if bMsg.kind == MsgReadyForQuery:
-            let status = if bMsg.payload.len > 0: bMsg.payload[0] else: '?'
-            leasedConn.lastStatus = toTransactionStatus(status)
+      # Phase 2: Consume responses from leased backend until ReadyForQuery ('Z')
+      let ok = await forwardBackendTurn(leasedConn, clientSock, backendBuf)
+      if not ok:
+        clientSock.close()
+        break
 
-            if status == 'I':
-              # Query / transaction completed. Release backend back to pool
-              await pool.release(leasedConn, dirty = false)
-              leasedConn = nil
-              completedTurn = true
-            else:
-              # InTransaction ('T') or FailedTransaction ('E').
-              # Turn completed, but transaction remains open and pinned!
-              completedTurn = true
-
-          if completedTurn:
-            break
-          else:
-            backendReadFut = leasedConn.socket.readMessage()
+      if leasedConn.lastStatus == Idle:
+        # Session back to Idle ('I'): release backend back to pool immediately!
+        if not leasedConn.isDirty:
+          pool.releaseFast(leasedConn)
+        else:
+          await pool.release(leasedConn, dirty = false)
+        leasedConn = nil
 
   except CatchableError as e:
     if verbose and not clientSock.isClosed:
       echo fmt"[CLIENT #{clientId}] Session error: {e.msg}"
-      flushFile(stdout)
   finally:
-    # Guarantee release if client disconnects unexpectedly
     if leasedConn != nil:
+      if leasedConn.lastStatus != Idle:
+        discard await leasedConn.executeSimple("ROLLBACK;")
       await pool.release(leasedConn, dirty = true)
       leasedConn = nil
 
@@ -222,16 +242,16 @@ proc startServer*(config: ServerConfig) {.async.} =
   echo "[*] Initializing high-concurrency connection pool..."
   let pool = newConnectionPool(config.poolSettings)
 
-  # Pre-warm 1 physical connection to verify Postgres and construct handshake buffer
+  # Pre-warm all physical connections to verify Postgres and construct handshake buffer
   try:
-    let warmAcq = await pool.acquire()
-    if warmAcq.status != AcquireOk:
-      echo fmt"[FATAL] Could not pre-warm connection pool: {warmAcq.errorMsg}"
+    await pool.prewarm()
+    if pool.idleConns.len == 0:
+      echo "[FATAL] No connections established with PostgreSQL"
       return
-    let warmConn = warmAcq.conn
+    let warmConn = pool.idleConns[0]
     prebuiltHandshake = assemblePrebuiltHandshake(warmConn.parameters)
-    await pool.release(warmConn, dirty = false)
     echo fmt"[OK] Connection established with PostgreSQL ({config.poolSettings.pgHost}:{config.poolSettings.pgPort.int})"
+    echo fmt"[*] Pre-warmed {pool.idleConns.len} physical backend connections"
     echo fmt"[*] Pre-assembled binary handshake cached in memory: {prebuiltHandshake.len} bytes"
   except CatchableError as e:
     echo fmt"[FATAL] Error connecting to PostgreSQL: {e.msg}"
@@ -239,11 +259,14 @@ proc startServer*(config: ServerConfig) {.async.} =
 
   let server = newAsyncSocket(buffered = false)
   server.setSockOpt(OptReuseAddr, true)
+  when defined(posix):
+    var reusePortVal: cint = 1
+    discard setsockopt(server.getFd(), posix.SOL_SOCKET, posix.SO_REUSEPORT, addr reusePortVal, SockLen(sizeof(reusePortVal)))
   if config.listenAddress.len > 0 and config.listenAddress != "0.0.0.0":
     server.bindAddr(config.listenPort, config.listenAddress)
   else:
     server.bindAddr(config.listenPort)
-  server.listen()
+  server.listen(4096)
 
   let bindDisplay = if config.listenAddress.len > 0: config.listenAddress else: "0.0.0.0"
   echo fmt"[*] Proxy listening on {bindDisplay}:{config.listenPort.int}"

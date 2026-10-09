@@ -25,13 +25,31 @@ proc onControlC() {.noconv.} =
   if shutdownFuture != nil and not shutdownFuture.finished:
     shutdownFuture.complete()
 
+proc workerThread(cfg: ServerConfig) {.thread.} =
+  {.cast(gcsafe).}:
+    waitFor startServer(cfg)
+
 proc main() =
   let serverConfig = parseConfig()
 
   setControlCHook(onControlC)
   raiseFileDescriptorLimit()
 
-  waitFor startServer(serverConfig)
+  if serverConfig.workers <= 1:
+    waitFor startServer(serverConfig)
+  else:
+    echo fmt"[*] Spawning {serverConfig.workers} native worker threads with SO_REUSEPORT..."
+    var threads = newSeq[Thread[ServerConfig]](serverConfig.workers)
+
+    var workerCfg = serverConfig
+    let connsPerWorker = max(1, serverConfig.poolSettings.maxConnections div serverConfig.workers)
+    workerCfg.poolSettings.maxConnections = connsPerWorker
+
+    for i in 0 ..< serverConfig.workers:
+      createThread(threads[i], workerThread, workerCfg)
+
+    for i in 0 ..< serverConfig.workers:
+      joinThread(threads[i])
 
 when isMainModule:
   main()

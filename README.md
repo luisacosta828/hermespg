@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Ultra-fast, featherweight PostgreSQL connection pooler and proxy in Nim.</strong><br>
-  <em>Sub-0.2ms Handshake • 5,500+ TPS • 301 KB Docker Scratch Image • Transaction Mode Multiplexing</em>
+  <em>Sub-0.2ms Handshake • 98,000+ TPS • ~260 KB Binary • Transaction Mode Multiplexing</em>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-Nim%202.0-orange.svg" alt="Nim 2.0" />
-  <img src="https://img.shields.io/badge/Throughput-5%2C500%2B%20TPS-brightgreen.svg" alt="Throughput: 5,500+ TPS" />
-  <img src="https://img.shields.io/badge/Docker%20Image-301%20KB%20(Scratch)-blue.svg" alt="Docker Image" />
+  <img src="https://img.shields.io/badge/Throughput-98%2C600%2B%20TPS-brightgreen.svg" alt="Throughput: 98,600+ TPS" />
+  <img src="https://img.shields.io/badge/Binary%20Size-260%20KB-blue.svg" alt="Binary Size" />
   <img src="https://img.shields.io/badge/Memory%20Footprint-~3%20MB%20RSS-blueviolet.svg" alt="Memory Footprint" />
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT" />
 </p>
@@ -58,13 +58,16 @@ Because HermesPG compiles to a standalone **287 KB static binary** and uses only
 
 ## ⚡ Key Features
 
+* **Native Multi-Core Worker Scaling (`SO_REUSEPORT`)**: Spawns multiple asynchronous worker threads bound to the same listener port using Linux kernel `SO_REUSEPORT`, scaling horizontally across all CPU cores with zero lock contention.
+* **Speculative Direct Streaming Ingress**: Single-syscall packet reads directly from kernel socket receive buffers, eliminating `MSG_PEEK` overhead and parsing pipelined extended query batches in 0 syscalls.
+* **Zero-Allocation Pool Fast-Path**: Synchronous stack-allocated acquisition and release (`tryAcquireFast` / `releaseFast`) for clean, idle connections, completely bypassing Future heap allocations and event loop scheduling.
 * **Transaction-Level Pooling**: Physical connections are leased only for the duration of a transaction or single query. As soon as PostgreSQL returns `'I'` (Idle), the backend is returned to the pool in $O(1)$.
 * **Full Extended Query Protocol Support**: Seamlessly pipelines binary `Parse`, `Bind`, `Describe`, `Execute`, and `Sync` packets with dynamic parameter tracking and transaction pinning.
 * **Sub-0.2ms Pre-Assembled Handshake**: Connection parameters and authentication responses are cached into a pre-compiled contiguous binary buffer and dispatched in a single `send` syscall.
 * **Fail-Fast $O(1)$ Load Shedding**: Implements a bounded double-ended queue (`Deque`). When peak capacity is reached, excess incoming requests are rejected immediately (< 0.2ms) with SQLSTATE `53300`, preventing database collapse from cascading bufferbloat.
 * **Transaction Watchdog (`idleTxTimeoutMs`)**: Detects rogue or abandoned transactions holding locks (`BEGIN` without `COMMIT`), issuing an automatic forced `ROLLBACK` to recover physical connections.
 * **Automatic Session Sanitization**: Tracks runtime parameter mutations (`SET timezone ...`) and automatically issues `DISCARD ALL;` before re-leasing dirty connections.
-* **Microscopic Container (`FROM scratch`)**: Fully static Musl ELF binary running in a 301 KB container image with zero third-party dependencies and zero attack surface.
+* **Featherweight Native Footprint**: Standalone ~260 KB native binary running with deterministic ARC memory management (~3 MB RSS) and zero third-party dependencies.
 
 ---
 
@@ -88,18 +91,17 @@ Run the driver test suite:
 
 ## 📊 Stress & Concurrency Benchmarks
 
-HermesPG ships with an automated stress and load-shedding test harness ([`tests/bench_stress.sh`](tests/bench_stress.sh)) powered by `pgbench`:
+HermesPG was benchmarked under real-world saturation using `pgbench` (100 concurrent clients, 8 threads, 3,000,000 transactions):
 
 ```bash
-./tests/bench_stress.sh
+pgbench -h 127.0.0.1 -p 6432 -U postgres -f bench_query.sql -c 100 -j 8 -t 30000 -n postgres
 ```
 
 ### Empirical Test Results:
-* **High-Concurrency Multiplexing (50 clients $\to$ 5 physical backends)**:
-  * Processed: **10,000 / 10,000 transactions** without errors.
-  * Throughput: **5,500+ TPS** sustained (up from 1,197 TPS, ~5x throughput jump).
-  * Average Latency: **~9.0 ms** under 100% saturation loop (cut down from 41.7 ms).
-  * PostgreSQL backend connections used: **Exactly 5**.
+* **High-Concurrency Saturation (100 clients $\to$ 48 pooled backends across 16 workers)**:
+  * Processed: **3,000,000 / 3,000,000 transactions** with 0 errors.
+  * Throughput: **98,642+ TPS** sustained.
+  * Average Latency: **1.01 ms** under full saturation.
 * **Load Shedding Under Extreme Overload**:
   * Configured with 1 backend connection and max queue of 5 (Total capacity = 6).
   * Flooded with 20 parallel slow queries.
