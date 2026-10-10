@@ -60,7 +60,7 @@ Because HermesPG compiles to a standalone **287 KB static binary** and uses only
 
 * **SCRAM-SHA-256 Mutual Authentication (RFC 5802 / RFC 7677)**: Native cryptographic SASL state machine powered by `checksums/sha2` with OS random nonce generation, seamlessly supporting Cleartext, MD5, and SCRAM-SHA-256 backend handshakes.
 * **Zero-Allocation Monotonic Wait Queue**: Queue timeout management driven by high-resolution monotonic deadlines (`MonoTime`) and a single lightweight $O(1)$ watchdog, eliminating event-loop timer proliferation and keeping memory flat under multi-million transaction saturation.
-* **Native Multi-Core Worker Scaling (`SO_REUSEPORT`)**: Spawns multiple asynchronous worker threads bound to the same listener port using Linux kernel `SO_REUSEPORT`, scaling horizontally across all CPU cores with zero lock contention.
+* **Native Multi-Core Worker Scaling**: Spawns multiple autonomous asynchronous worker threads bound to the listener port, scaling horizontally across all CPU cores with zero lock contention.
 * **Speculative Direct Streaming Ingress**: Single-syscall packet reads directly from kernel socket receive buffers, eliminating `MSG_PEEK` overhead and parsing pipelined extended query batches in 0 syscalls.
 * **Zero-Allocation Pool Fast-Path**: Synchronous stack-allocated acquisition and release (`tryAcquireFast` / `releaseFast`) for clean, idle connections, completely bypassing Future heap allocations and event loop scheduling.
 * **Transaction-Level Pooling**: Physical connections are leased only for the duration of a transaction or single query. As soon as PostgreSQL returns `'I'` (Idle), the backend is returned to the pool in $O(1)$.
