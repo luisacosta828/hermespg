@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>HermesPG — Ultra-Fast PostgreSQL Connection Pooler & Proxy in Nim</title>
-  <meta name="description" content="High-performance, featherweight PostgreSQL connection pooler and proxy in Nim. 140,000+ TPS, 0.71 ms latency, SCRAM-SHA-256, and 280 KB native binary.">
+  <meta name="description" content="High-performance, featherweight PostgreSQL connection pooler and proxy in Nim. 140,000+ TPS, 0.71 ms latency, SCRAM-SHA-256, and ~300 KB native binary.">
   <link rel="icon" type="image/jpeg" href="assets/logo.jpg">
 
   <!-- Typography -->
@@ -166,7 +166,7 @@
             <div class="text-xs uppercase tracking-wider text-slate-400 mt-1">Average Latency</div>
           </div>
           <div>
-            <div class="text-2xl sm:text-3xl font-extrabold text-cyan-300 font-mono">280 KB</div>
+            <div class="text-2xl sm:text-3xl font-extrabold text-cyan-300 font-mono">~300 KB</div>
             <div class="text-xs uppercase tracking-wider text-slate-400 mt-1">Static Binary</div>
           </div>
         </div>
@@ -316,7 +316,7 @@
         <span class="text-xs uppercase font-mono font-bold text-cyan-400 tracking-widest">Topology Design</span>
         <h2 class="text-3xl sm:text-4xl font-extrabold text-white mt-2 mb-4">The "Edge Pool" Architecture</h2>
         <p class="text-slate-400 leading-relaxed">
-          Because HermesPG compiles to a standalone <strong>280 KB native binary</strong> with zero external runtime dependencies 
+          Because HermesPG compiles to a standalone <strong>~300 KB native binary</strong> with zero external runtime dependencies 
           and uses only <strong>~20 MB of RAM</strong>, it enables a distributed sidecar paradigm that traditional multi-megabyte proxies cannot match.
         </p>
       </div>

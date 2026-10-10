@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Ultra-fast, featherweight PostgreSQL connection pooler and proxy in Nim.</strong><br>
-  <em>Sub-0.2ms Handshake • 140,000+ TPS • ~280 KB Binary • Transaction Mode Multiplexing</em>
+  <em>Sub-0.2ms Handshake • 140,000+ TPS • ~300 KB Binary • Transaction Mode Multiplexing</em>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-Nim%202.0-orange.svg" alt="Nim 2.0" />
   <img src="https://img.shields.io/badge/Throughput-140%2C000%2B%20TPS-brightgreen.svg" alt="Throughput: 140,000+ TPS" />
-  <img src="https://img.shields.io/badge/Binary%20Size-280%20KB-blue.svg" alt="Binary Size" />
+  <img src="https://img.shields.io/badge/Binary%20Size-300%20KB-blue.svg" alt="Binary Size" />
   <img src="https://img.shields.io/badge/Memory%20Footprint-~3%20MB%20RSS-blueviolet.svg" alt="Memory Footprint" />
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT" />
 </p>
