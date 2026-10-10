@@ -8,6 +8,7 @@ nimcache/
 /tests/test_pool
 /tests/test_config
 /tests/test_extended_query
+/tests/test_scram
 /tests/bench_load
 *.out
 testresults/

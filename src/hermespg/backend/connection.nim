@@ -1,6 +1,7 @@
-## Autonomous PostgreSQL backend connection managed by the Pool
-import std/[asyncnet, asyncdispatch, tables, strutils, strformat, md5, nativesockets, posix]
+import std/[asyncnet, asyncdispatch, tables, strutils, strformat, nativesockets, posix]
+import checksums/md5
 import ../protocol/[messages, codec]
+import ../crypto/scram
 
 type
   BackendConn* = ref object
@@ -103,6 +104,8 @@ proc connectBackend*(host: string, port: Port, user, password, database: string,
   await conn.socket.writeMessage(startupMsg)
 
   # Authentication loop
+  var scramState = newScramClient(user, password)
+
   while true:
     let msg = await conn.socket.readMessage()
     if msg.length == 0:
@@ -111,12 +114,13 @@ proc connectBackend*(host: string, port: Port, user, password, database: string,
 
     case msg.kind
     of MsgAuth:
-      let authType = if msg.payload.len >= 4: readInt32BE(msg.payload, 0) else: -1
-      case authType
-      of 0:
-        # AuthenticationOk
+      let rawCode = if msg.payload.len >= 4: readInt32BE(msg.payload, 0) else: -1
+      let authKind = toAuthRequestKind(rawCode)
+      case authKind
+      of AuthOk:
+        # Authentication successful
         discard
-      of 3:
+      of AuthCleartextPassword:
         # Cleartext password
         let passPayload = password & "\0"
         let passMsg = PgMessage(
@@ -125,7 +129,7 @@ proc connectBackend*(host: string, port: Port, user, password, database: string,
           payload: passPayload
         )
         await conn.socket.writeMessage(passMsg)
-      of 5:
+      of AuthMD5Password:
         # MD5 password: 4-byte salt in msg.payload[4..7]
         if msg.payload.len < 8:
           raise newException(ValueError, "Insufficient payload for MD5 authentication")
@@ -138,8 +142,45 @@ proc connectBackend*(host: string, port: Port, user, password, database: string,
           payload: outer
         )
         await conn.socket.writeMessage(passMsg)
+      of AuthSASL:
+        # Server requests SASL authentication negotiation (SCRAM-SHA-256)
+        let mechList = if msg.payload.len > 4: msg.payload[4 .. ^1] else: ""
+        if not mechList.contains("SCRAM-SHA-256"):
+          raise newException(ValueError, "PostgreSQL does not offer SCRAM-SHA-256: " & mechList)
+
+        let clientFirst = scramState.buildClientFirstMessage()
+        var saslResp = "SCRAM-SHA-256\0"
+        saslResp.add(writeInt32BE(int32(clientFirst.len)))
+        saslResp.add(clientFirst)
+
+        let passMsg = PgMessage(
+          kind: MsgPassword,
+          length: int32(4 + saslResp.len),
+          payload: saslResp
+        )
+        await conn.socket.writeMessage(passMsg)
+      of AuthSASLContinue:
+        # Server challenge with salt and iterations
+        if msg.payload.len <= 4:
+          raise newException(ValueError, "Insufficient payload for AuthenticationSASLContinue")
+        let serverFirst = msg.payload[4 .. ^1]
+        let clientFinal = scramState.processServerFirstAndBuildFinal(serverFirst)
+
+        let passMsg = PgMessage(
+          kind: MsgPassword,
+          length: int32(4 + clientFinal.len),
+          payload: clientFinal
+        )
+        await conn.socket.writeMessage(passMsg)
+      of AuthSASLFinal:
+        # Server final message with ServerSignature for mutual authentication
+        if msg.payload.len <= 4:
+          raise newException(ValueError, "Insufficient payload for AuthenticationSASLFinal")
+        let serverFinal = msg.payload[4 .. ^1]
+        if not scramState.verifyServerFinalMessage(serverFinal):
+          raise newException(ValueError, "SCRAM-SHA-256 server signature verification failed")
       else:
-        raise newException(ValueError, fmt"Unsupported authentication mechanism: {authType}")
+        raise newException(ValueError, fmt"Unsupported authentication mechanism: {authKind}")
     of MsgParameterStatus:
       # Store session parameters (key\0val\0)
       let nullPos = msg.payload.find('\0')

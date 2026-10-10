@@ -246,7 +246,10 @@ proc readMessageInto*(socket: AsyncSocket, buf: PacketBuffer): Future[int] {.asy
       if msgSize > buf.data.len:
         buf.data.setLen(msgSize)
 
-    let availSpace = buf.data.len - buf.wpos
+    var availSpace = buf.data.len - buf.wpos
+    if availSpace <= 0:
+      buf.data.setLen(max(buf.data.len * 2, buf.wpos + 4096))
+      availSpace = buf.data.len - buf.wpos
     let n = await socket.recvInto(addr buf.data[buf.wpos], availSpace)
     if n == 0:
       if buf.wpos == 0:
@@ -310,7 +313,10 @@ proc readStartupOrSslInto*(socket: AsyncSocket, buf: PacketBuffer): Future[tuple
       if msgSize > buf.data.len:
         buf.data.setLen(msgSize)
 
-    let availSpace = buf.data.len - buf.wpos
+    var availSpace = buf.data.len - buf.wpos
+    if availSpace <= 0:
+      buf.data.setLen(max(buf.data.len * 2, buf.wpos + 4096))
+      availSpace = buf.data.len - buf.wpos
     let n = await socket.recvInto(addr buf.data[buf.wpos], availSpace)
     if n == 0:
       if buf.wpos == 0:

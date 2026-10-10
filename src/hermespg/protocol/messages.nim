@@ -39,6 +39,37 @@ type
     Idle = 'I'
     InTransaction = 'T'
 
+  AuthRequestKind* = enum
+    AuthOk = 0                ## 0: Authentication successful
+    AuthKerberosV5 = 1        ## 1: Kerberos V5 (obsolete)
+    AuthCleartextPassword = 3 ## 3: Cleartext password
+    AuthMD5Password = 5       ## 5: MD5 hashed password
+    AuthSCMCredential = 6     ## 6: SCM credential
+    AuthGSS = 7               ## 7: GSSAPI
+    AuthGSSContinue = 8       ## 8: GSSAPI continue
+    AuthSSPI = 9              ## 9: SSPI (Windows)
+    AuthSASL = 10             ## 10: SASL negotiation (SCRAM-SHA-256)
+    AuthSASLContinue = 11     ## 11: Server challenge with salt and iterations
+    AuthSASLFinal = 12        ## 12: Server final signature verification
+
+proc toAuthRequestKind*(code: int32): AuthRequestKind =
+  case code
+  of 0: AuthOk
+  of 1: AuthKerberosV5
+  of 3: AuthCleartextPassword
+  of 5: AuthMD5Password
+  of 6: AuthSCMCredential
+  of 7: AuthGSS
+  of 8: AuthGSSContinue
+  of 9: AuthSSPI
+  of 10: AuthSASL
+  of 11: AuthSASLContinue
+  of 12: AuthSASLFinal
+  else:
+    raise newException(ValueError, "Unknown PostgreSQL authentication code: " & $code)
+
+type
+
   PgMessage* = object
     kind*: char       ## 1-byte identifier ('Q', 'Z', 'R', etc.) or '\0' for Startup
     length*: int32    ## Declared total length (includes the 4 bytes of length)

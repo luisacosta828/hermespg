@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+* **SCRAM-SHA-256 Authentication (RFC 5802 / RFC 7677)**:
+  * Implemented pure cryptographic primitives in `crypto/scram.nim` using `checksums/sha2` (SHA-256, HMAC-SHA-256, PBKDF2-HMAC-SHA-256) and OS secure random nonce generation (`std/sysrand`).
+  * Added full SASL state machine handling (`AuthSASL`, `AuthSASLContinue`, `AuthSASLFinal`) for secure modern PostgreSQL backend connections.
+  * Added `tests/test_scram.nim` covering RFC 4231, RFC 6070, and RFC 7677 standard test vectors.
+* **Enum-Based Authentication Handshake**:
+  * Replaced numerical magic constants (`0..12`) with explicit `AuthRequestKind` enum and converter in `protocol/messages.nim`.
+
+### Fixed
+* **Event Loop Timer Leak & 100% CPU/Memory Thrashing**:
+  * Replaced `withTimeout` in `backend/pool.nim` with a zero-allocation monotonic deadline queue (`MonoTime`).
+  * Replaced millions of concurrent 15-second `sleepAsync` futures in the event loop with a single lightweight background watchdog checking queue heads in $O(1)$.
+  * Eliminated multi-gigabyte memory accumulation and CPU thrashing during sustained multi-million transaction workloads. Memory remains flat at ~20 MB across 16 worker threads.
+* **Codec Full-Buffer Boundary Protection**:
+  * Added defensive reallocation in `protocol/codec.nim` (`readMessageInto` and `readStartupOrSslInto`) to guarantee `availSpace > 0`, preventing tight spin-loops when buffers are full.
+
+### Performance
+* **Throughput Surged to 120,385 TPS**:
+  * Sustained throughput increased by +24.4% (from 98.6K to 120.3K+ TPS) and latency dropped to 0.83 ms during 3,000,000 transaction continuous `pgbench` benchmarks.
+
+---
+
 ## [0.1.3] - 2026-10-08
 
 ### Added

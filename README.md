@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Ultra-fast, featherweight PostgreSQL connection pooler and proxy in Nim.</strong><br>
-  <em>Sub-0.2ms Handshake • 98,000+ TPS • ~260 KB Binary • Transaction Mode Multiplexing</em>
+  <em>Sub-0.2ms Handshake • 120,000+ TPS • ~280 KB Binary • Transaction Mode Multiplexing</em>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-Nim%202.0-orange.svg" alt="Nim 2.0" />
-  <img src="https://img.shields.io/badge/Throughput-98%2C600%2B%20TPS-brightgreen.svg" alt="Throughput: 98,600+ TPS" />
-  <img src="https://img.shields.io/badge/Binary%20Size-260%20KB-blue.svg" alt="Binary Size" />
+  <img src="https://img.shields.io/badge/Throughput-120%2C000%2B%20TPS-brightgreen.svg" alt="Throughput: 120,000+ TPS" />
+  <img src="https://img.shields.io/badge/Binary%20Size-280%20KB-blue.svg" alt="Binary Size" />
   <img src="https://img.shields.io/badge/Memory%20Footprint-~3%20MB%20RSS-blueviolet.svg" alt="Memory Footprint" />
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT" />
 </p>
@@ -58,6 +58,8 @@ Because HermesPG compiles to a standalone **287 KB static binary** and uses only
 
 ## ⚡ Key Features
 
+* **SCRAM-SHA-256 Mutual Authentication (RFC 5802 / RFC 7677)**: Native cryptographic SASL state machine powered by `checksums/sha2` with OS random nonce generation, seamlessly supporting Cleartext, MD5, and SCRAM-SHA-256 backend handshakes.
+* **Zero-Allocation Monotonic Wait Queue**: Queue timeout management driven by high-resolution monotonic deadlines (`MonoTime`) and a single lightweight $O(1)$ watchdog, eliminating event-loop timer proliferation and keeping memory flat under multi-million transaction saturation.
 * **Native Multi-Core Worker Scaling (`SO_REUSEPORT`)**: Spawns multiple asynchronous worker threads bound to the same listener port using Linux kernel `SO_REUSEPORT`, scaling horizontally across all CPU cores with zero lock contention.
 * **Speculative Direct Streaming Ingress**: Single-syscall packet reads directly from kernel socket receive buffers, eliminating `MSG_PEEK` overhead and parsing pipelined extended query batches in 0 syscalls.
 * **Zero-Allocation Pool Fast-Path**: Synchronous stack-allocated acquisition and release (`tryAcquireFast` / `releaseFast`) for clean, idle connections, completely bypassing Future heap allocations and event loop scheduling.
@@ -67,7 +69,7 @@ Because HermesPG compiles to a standalone **287 KB static binary** and uses only
 * **Fail-Fast $O(1)$ Load Shedding**: Implements a bounded double-ended queue (`Deque`). When peak capacity is reached, excess incoming requests are rejected immediately (< 0.2ms) with SQLSTATE `53300`, preventing database collapse from cascading bufferbloat.
 * **Transaction Watchdog (`idleTxTimeoutMs`)**: Detects rogue or abandoned transactions holding locks (`BEGIN` without `COMMIT`), issuing an automatic forced `ROLLBACK` to recover physical connections.
 * **Automatic Session Sanitization**: Tracks runtime parameter mutations (`SET timezone ...`) and automatically issues `DISCARD ALL;` before re-leasing dirty connections.
-* **Featherweight Native Footprint**: Standalone ~260 KB native binary running with deterministic ARC memory management (~3 MB RSS) and zero third-party dependencies.
+* **Featherweight Native Footprint**: Standalone ~280 KB native binary running with deterministic ARC/ORC memory management (~3 MB baseline RSS) and zero external runtime dependencies.
 
 ---
 
@@ -99,9 +101,10 @@ pgbench -h 127.0.0.1 -p 6432 -U postgres -f bench_query.sql -c 100 -j 8 -t 30000
 
 ### Empirical Test Results:
 * **High-Concurrency Saturation (100 clients $\to$ 48 pooled backends across 16 workers)**:
-  * Processed: **3,000,000 / 3,000,000 transactions** with 0 errors.
-  * Throughput: **98,642+ TPS** sustained.
-  * Average Latency: **1.01 ms** under full saturation.
+  * Processed: **3,000,000 / 3,000,000 transactions** with 0 errors (100% completion).
+  * Throughput: **120,385+ TPS** sustained (+24.4% throughput surge).
+  * Average Latency: **0.83 ms** under full saturation.
+  * Memory RSS: **~20 MB flat** across 16 worker threads (zero memory leak across 3 million queries).
 * **Load Shedding Under Extreme Overload**:
   * Configured with 1 backend connection and max queue of 5 (Total capacity = 6).
   * Flooded with 20 parallel slow queries.

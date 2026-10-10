@@ -1,5 +1,5 @@
 ## Connection Pool Manager with bounded O(1) wait queues, Load Shedding, and Fail-Fast flow
-import std/[asyncnet, asyncdispatch, strformat, deques]
+import std/[asyncnet, asyncdispatch, strformat, deques, monotimes, times]
 import ../protocol/messages
 import ./connection
 
@@ -31,7 +31,7 @@ type
 
   PendingClient* = ref object
     fut*: Future[BackendConn]
-    isCancelled*: bool
+    deadline*: MonoTime
 
   ConnectionPool* = ref object
     settings*: PoolSettings
@@ -40,16 +40,40 @@ type
     waitQueue*: Deque[PendingClient]
     isShuttingDown*: bool
     nextConnId*: int
+    watchdogRunning*: bool
+
+proc checkTimeouts(pool: ConnectionPool) =
+  let now = getMonoTime()
+  while pool.waitQueue.len > 0:
+    let first = pool.waitQueue.peekFirst()
+    if now >= first.deadline:
+      let client = pool.waitQueue.popFirst()
+      if not client.fut.finished:
+        client.fut.complete(nil)
+    else:
+      break
+
+proc startWatchdog(pool: ConnectionPool) =
+  if pool.watchdogRunning: return
+  pool.watchdogRunning = true
+  asyncCheck (proc() {.async.} =
+    while not pool.isShuttingDown:
+      await sleepAsync(50)
+      pool.checkTimeouts()
+    pool.watchdogRunning = false
+  )()
 
 proc newConnectionPool*(settings: PoolSettings): ConnectionPool =
-  ConnectionPool(
+  result = ConnectionPool(
     settings: settings,
     idleConns: @[],
     activeCount: 0,
     waitQueue: initDeque[PendingClient](),
     isShuttingDown: false,
-    nextConnId: 1
+    nextConnId: 1,
+    watchdogRunning: false
   )
+  result.startWatchdog()
 
 proc prewarm*(pool: ConnectionPool): Future[void] {.async.} =
   ## Pre-establishes all configured backend connections to PostgreSQL up-front.
@@ -131,22 +155,21 @@ proc acquire*(pool: ConnectionPool): Future[AcquireResult] {.async.} =
   if pool.waitQueue.len >= pool.settings.maxQueueSize:
     return AcquireResult(status: AcquireQueueFull, conn: nil)
 
-  # 4. Enqueue in O(1) deque with acquisition timeout
+  # 4. Enqueue in O(1) deque with monotonic deadline
+  let deadline = getMonoTime() + initDuration(milliseconds = pool.settings.acquireTimeoutMs)
   let pending = PendingClient(
     fut: newFuture[BackendConn]("acquire.wait"),
-    isCancelled: false
+    deadline: deadline
   )
   pool.waitQueue.addLast(pending)
 
-  let completed = await withTimeout(pending.fut, pool.settings.acquireTimeoutMs)
-  if not completed:
-    pending.isCancelled = true
+  let conn = await pending.fut
+  if conn == nil:
+    if pool.isShuttingDown:
+      return AcquireResult(status: AcquireShuttingDown, conn: nil)
     return AcquireResult(status: AcquireTimeout, conn: nil)
 
-  if pending.fut.failed:
-    return AcquireResult(status: AcquireShuttingDown, conn: nil)
-
-  return AcquireResult(status: AcquireOk, conn: pending.fut.read())
+  return AcquireResult(status: AcquireOk, conn: conn)
 
 proc releaseFast*(pool: ConnectionPool, conn: BackendConn) {.inline.} =
   ## Zero-allocation synchronous release fast path for idle clean connections.
@@ -154,9 +177,13 @@ proc releaseFast*(pool: ConnectionPool, conn: BackendConn) {.inline.} =
   if conn == nil or not conn.isAlive or conn.socket.isClosed:
     return
 
+  let now = getMonoTime()
   while pool.waitQueue.len > 0:
     let nextClient = pool.waitQueue.popFirst()
-    if not nextClient.isCancelled and not nextClient.fut.finished:
+    if not nextClient.fut.finished:
+      if now > nextClient.deadline:
+        nextClient.fut.complete(nil)
+        continue
       nextClient.fut.complete(conn)
       return
 
@@ -188,9 +215,13 @@ proc release*(pool: ConnectionPool, conn: BackendConn, dirty = false) {.async.} 
     return
 
   # Dispatch directly to next waiting client in O(1)
+  let now = getMonoTime()
   while pool.waitQueue.len > 0:
     let nextClient = pool.waitQueue.popFirst()
-    if not nextClient.isCancelled and not nextClient.fut.finished:
+    if not nextClient.fut.finished:
+      if now > nextClient.deadline:
+        nextClient.fut.complete(nil)
+        continue
       if pool.settings.resetBeforeFirstQuery and conn.isDirty and pool.settings.resetQuery.len > 0:
         discard await conn.executeSimple(pool.settings.resetQuery)
         conn.isDirty = false
@@ -205,8 +236,7 @@ proc shutdown*(pool: ConnectionPool, graceTimeoutMs = 5000): Future[void] {.asyn
   while pool.waitQueue.len > 0:
     let pending = pool.waitQueue.popFirst()
     if not pending.fut.finished:
-      pending.isCancelled = true
-      pending.fut.fail(newException(IOError, "Connection pool was closed"))
+      pending.fut.complete(nil)
 
   for conn in pool.idleConns:
     await conn.terminate()
