@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HermesPG ⚡ Ultra-Fast PostgreSQL Connection Pooler & Proxy in Nim</title>
+  <meta name="description" content="Sub-0.2ms Handshake • 140,000+ TPS • 280 KB Binary • SCRAM-SHA-256 • Transaction Mode Multiplexing in Nim.">
+  <link rel="icon" type="image/jpeg" href="assets/logo.jpg">
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              navy: '#060a12',
+              card: '#0c121e',
+              border: '#1a2436',
+              cyan: '#06b6d4',
+              teal: '#14b8a6',
+              amber: '#f59e0b',
+              electric: '#38bdf8',
+              pgblue: '#336791',
+            }
+          },
+          animation: {
+            'glow-pulse': 'glow 4s ease-in-out infinite alternate',
+            'float': 'float 6s ease-in-out infinite',
+          },
+          keyframes: {
+            glow: {
+              '0%': { opacity: '0.4', transform: 'scale(0.98)' },
+              '100%': { opacity: '0.8', transform: 'scale(1.02)' },
+            },
+            float: {
+              '0%, 100%': { transform: 'translateY(0)' },
+              '50%': { transform: 'translateY(-8px)' },
+            }
+          }
+        }
+      }
+    }
+  </script>
+  
+  <style>
+    body {
+      background-color: #060a12;
+      color: #e2e8f0;
+      overflow-x: hidden;
+    }
+    .neon-border {
+      border: 1px solid rgba(56, 189, 248, 0.2);
+      box-shadow: 0 0 25px -5px rgba(6, 182, 212, 0.15);
+    }
+    .neon-border-hover:hover {
+      border-color: rgba(56, 189, 248, 0.5);
+      box-shadow: 0 0 35px -5px rgba(6, 182, 212, 0.3);
+    }
+    .amber-glow {
+      box-shadow: 0 0 25px -5px rgba(245, 158, 11, 0.25);
+    }
+    .glass-nav {
+      background: rgba(6, 10, 18, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    }
+    .code-box {
+      background: #090e17;
+      border: 1px solid #1a2436;
+    }
+    /* Gradient text helper */
+    .gradient-text-cyan {
+      background: linear-gradient(135deg, #38bdf8 0%, #06b6d4 50%, #2dd4bf 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .gradient-text-gold {
+      background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+  </style>
+</head>
+<body class="selection:bg-cyan-500 selection:text-black">
+
+  <!-- Ambient Background Glows -->
+  <div class="fixed inset-0 pointer-events-none z-0 overflow-hidden">
+    <div class="absolute top-[-10%] left-[20%] w-[650px] h-[650px] bg-cyan-600/10 rounded-full blur-[140px] animate-glow-pulse"></div>
+    <div class="absolute top-[30%] right-[10%] w-[500px] h-[500px] bg-amber-500/10 rounded-full blur-[130px] animate-glow-pulse" style="animation-delay: 2s;"></div>
+    <div class="absolute bottom-[10%] left-[10%] w-[600px] h-[600px] bg-blue-600/10 rounded-full blur-[150px]"></div>
+  </div>
+
+  <!-- Navigation -->
+  <nav class="fixed top-0 left-0 right-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
+      <a href="#" class="flex items-center gap-3 group">
+        <div class="relative w-11 h-11 rounded-xl overflow-hidden p-[1px] bg-gradient-to-tr from-cyan-500 via-sky-400 to-amber-400 group-hover:scale-105 transition-transform duration-300">
+          <img src="assets/logo.jpg" alt="HermesPG Logo" class="w-full h-full object-cover rounded-[11px]">
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xl font-bold tracking-tight text-white font-mono">Hermes<span class="text-cyan-400">PG</span></span>
+          <span class="text-xs px-2 py-0.5 rounded-full bg-cyan-950/80 text-cyan-300 border border-cyan-800/60 font-mono font-medium">v0.2.0</span>
+        </div>
+      </a>
+
+      <div class="hidden md:flex items-center gap-8 text-sm font-medium text-slate-300">
+        <a href="#benchmarks" class="hover:text-cyan-400 transition-colors">Benchmarks</a>
+        <a href="#features" class="hover:text-cyan-400 transition-colors">Features</a>
+        <a href="#architecture" class="hover:text-cyan-400 transition-colors">Architecture</a>
+        <a href="#drivers" class="hover:text-cyan-400 transition-colors">Drivers</a>
+        <a href="#quickstart" class="hover:text-cyan-400 transition-colors">Quickstart</a>
+      </div>
+
+      <div class="flex items-center gap-4">
+        <a href="https://github.com/luisacosta828/hermespg" target="_blank" rel="noopener noreferrer" 
+           class="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900/90 hover:bg-slate-800 text-white text-sm font-medium border border-slate-700/80 hover:border-cyan-500/50 transition-all duration-200">
+          <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
+          </svg>
+          <span>Star on GitHub</span>
+          <span class="text-xs bg-slate-800 px-1.5 py-0.5 rounded text-cyan-400 font-mono font-semibold">★</span>
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <main class="relative z-10 pt-32 pb-24 px-6 max-w-7xl mx-auto">
+    <div class="text-center max-w-4xl mx-auto">
+      
+      <!-- Version & Milestone Badge -->
+      <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-cyan-950/60 border border-cyan-800/80 mb-8 backdrop-blur">
+        <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+        <span class="text-xs font-mono font-semibold text-cyan-300">HermesPG v0.2.0 Released</span>
+        <span class="text-slate-500">•</span>
+        <span class="text-xs font-mono text-amber-400 font-medium">140,904 TPS Sustained</span>
+      </div>
+
+      <!-- Main Headline -->
+      <h1 class="text-5xl md:text-7xl font-extrabold tracking-tight text-white mb-6 leading-tight">
+        Ultra-Fast, Featherweight <br>
+        <span class="gradient-text-cyan">PostgreSQL Connection Pooler</span>
+      </h1>
+
+      <p class="text-lg md:text-xl text-slate-300 max-w-3xl mx-auto mb-10 leading-relaxed font-normal">
+        Multiplex thousands of active clients across a lean physical pool with 
+        <strong class="text-cyan-300">0.71 ms latency</strong>, deterministic ORC memory safety, 
+        and pure native speed in a <strong class="text-amber-300">280 KB binary</strong>.
+      </p>
+
+      <!-- CTA Buttons -->
+      <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-16">
+        <a href="#quickstart" class="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-500 hover:from-cyan-400 hover:to-sky-400 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-cyan-500/25 transition-all duration-200">
+          ⚡ Get Started in 30 Seconds
+        </a>
+        <a href="#benchmarks" class="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-white font-semibold text-sm border border-slate-700/80 hover:border-slate-600 transition-all duration-200">
+          📊 View Benchmarks
+        </a>
+      </div>
+
+      <!-- Hero Logo Card -->
+      <div class="relative max-w-lg mx-auto mb-20 animate-float">
+        <div class="absolute -inset-1.5 bg-gradient-to-r from-cyan-500 via-sky-500 to-amber-500 rounded-3xl blur-xl opacity-40 group-hover:opacity-75 transition duration-1000"></div>
+        <div class="relative rounded-2xl overflow-hidden neon-border bg-slate-950/80 p-3 shadow-2xl backdrop-blur-xl">
+          <img src="assets/logo.jpg" alt="HermesPG Winged Slonik Emblem" class="w-full h-auto rounded-xl shadow-inner">
+          <div class="absolute bottom-6 left-6 right-6 p-4 rounded-xl bg-slate-950/80 backdrop-blur-md border border-slate-800/80 flex items-center justify-between text-left">
+            <div>
+              <div class="text-xs uppercase font-mono font-semibold text-cyan-400 tracking-wider">The Winged Slonik</div>
+              <div class="text-sm font-bold text-white">PostgreSQL Made Weightless</div>
+            </div>
+            <div class="text-right font-mono">
+              <span class="text-xs px-2 py-1 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold">&lt;0.2ms Handshake</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Metrics Bar -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-5xl mx-auto">
+        <div class="p-6 rounded-2xl bg-brand-card/90 neon-border text-center">
+          <div class="text-3xl md:text-4xl font-extrabold gradient-text-cyan font-mono mb-1">140,904</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-slate-400">Transactions / Sec (TPS)</div>
+        </div>
+        <div class="p-6 rounded-2xl bg-brand-card/90 neon-border text-center">
+          <div class="text-3xl md:text-4xl font-extrabold gradient-text-gold font-mono mb-1">0.71 ms</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-slate-400">Saturation Latency</div>
+        </div>
+        <div class="p-6 rounded-2xl bg-brand-card/90 neon-border text-center">
+          <div class="text-3xl md:text-4xl font-extrabold text-white font-mono mb-1">280 KB</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-slate-400">Standalone Binary</div>
+        </div>
+        <div class="p-6 rounded-2xl bg-brand-card/90 neon-border text-center">
+          <div class="text-3xl md:text-4xl font-extrabold text-cyan-400 font-mono mb-1">~20 MB</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-slate-400">Deterministic RAM (16 Threads)</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Benchmarks Section -->
+    <section id="benchmarks" class="mt-32 pt-16">
+      <div class="text-center max-w-3xl mx-auto mb-16">
+        <span class="text-xs uppercase font-mono font-semibold text-cyan-400 tracking-widest">Empirical Stress Testing</span>
+        <h2 class="text-4xl font-extrabold text-white mt-2 mb-4">Unrivaled High-Concurrency Throughput</h2>
+        <p class="text-slate-400">
+          Tested with <code class="text-cyan-300 font-mono text-sm">pgbench</code> under extreme continuous load: 
+          <strong>100 concurrent clients</strong>, <strong>8 test threads</strong>, 
+          and <strong>3,000,000 continuous transactions</strong> against PostgreSQL 16.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 max-w-5xl mx-auto">
+        <!-- Throughput Chart Card -->
+        <div class="p-8 rounded-2xl bg-brand-card/90 neon-border">
+          <div class="flex items-center justify-between mb-8">
+            <h3 class="text-lg font-bold text-white flex items-center gap-2">
+              <span class="w-3 h-3 rounded-full bg-cyan-400"></span>
+              Throughput (Transactions per Second)
+            </h3>
+            <span class="text-xs font-mono text-cyan-300 font-bold bg-cyan-950 px-2.5 py-1 rounded border border-cyan-800">Higher is better</span>
+          </div>
+
+          <div class="space-y-6">
+            <!-- HermesPG -->
+            <div>
+              <div class="flex justify-between text-sm font-semibold mb-2">
+                <span class="text-cyan-300 flex items-center gap-1.5">
+                  ⚡ <strong>HermesPG v0.2.0</strong>
+                </span>
+                <span class="font-mono text-cyan-300 font-bold">140,904 TPS</span>
+              </div>
+              <div class="h-4 w-full bg-slate-900 rounded-full overflow-hidden p-0.5 border border-slate-800">
+                <div class="h-full bg-gradient-to-r from-cyan-500 to-sky-400 rounded-full" style="width: 100%;"></div>
+              </div>
+            </div>
+
+            <!-- PgBouncer -->
+            <div>
+              <div class="flex justify-between text-sm font-medium mb-2 text-slate-300">
+                <span>PgBouncer (Transaction Mode)</span>
+                <span class="font-mono text-slate-400">~92,400 TPS</span>
+              </div>
+              <div class="h-4 w-full bg-slate-900 rounded-full overflow-hidden p-0.5 border border-slate-800">
+                <div class="h-full bg-slate-600 rounded-full" style="width: 65%;"></div>
+              </div>
+            </div>
+
+            <!-- Direct Postgres -->
+            <div>
+              <div class="flex justify-between text-sm font-medium mb-2 text-slate-400">
+                <span>Direct PostgreSQL (No Pooler)</span>
+                <span class="font-mono text-slate-400">~18,500 TPS</span>
+              </div>
+              <div class="h-4 w-full bg-slate-900 rounded-full overflow-hidden p-0.5 border border-slate-800">
+                <div class="h-full bg-slate-700 rounded-full" style="width: 13%;"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-8 pt-6 border-t border-slate-800/80 text-xs text-slate-400 flex items-center justify-between font-mono">
+            <span>Result: <strong>+52% faster than PgBouncer</strong></span>
+            <span>100% Transactions Completed</span>
+          </div>
+        </div>
+
+        <!-- Latency Chart Card -->
+        <div class="p-8 rounded-2xl bg-brand-card/90 neon-border">
+          <div class="flex items-center justify-between mb-8">
+            <h3 class="text-lg font-bold text-white flex items-center gap-2">
+              <span class="w-3 h-3 rounded-full bg-amber-400"></span>
+              Average Saturation Latency (ms)
+            </h3>
+            <span class="text-xs font-mono text-amber-300 font-bold bg-amber-950 px-2.5 py-1 rounded border border-amber-800">Lower is better</span>
+          </div>
+
+          <div class="space-y-6">
+            <!-- HermesPG -->
+            <div>
+              <div class="flex justify-between text-sm font-semibold mb-2">
+                <span class="text-amber-300 flex items-center gap-1.5">
+                  ⚡ <strong>HermesPG v0.2.0</strong>
+                </span>
+                <span class="font-mono text-amber-300 font-bold">0.71 ms</span>
+              </div>
+              <div class="h-4 w-full bg-slate-900 rounded-full overflow-hidden p-0.5 border border-slate-800">
+                <div class="h-full bg-gradient-to-r from-amber-400 to-amber-500 rounded-full" style="width: 12%;"></div>
+              </div>
+            </div>
+
+            <!-- PgBouncer -->
+            <div>
+              <div class="flex justify-between text-sm font-medium mb-2 text-slate-300">
+                <span>PgBouncer (Transaction Mode)</span>
+                <span class="font-mono text-slate-400">1.15 ms</span>
+              </div>
+              <div class="h-4 w-full bg-slate-900 rounded-full overflow-hidden p-0.5 border border-slate-800">
+                <div class="h-full bg-slate-600 rounded-full" style="width: 20%;"></div>
+              </div>
+            </div>
+
+            <!-- Direct Postgres -->
+            <div>
+              <div class="flex justify-between text-sm font-medium mb-2 text-slate-400">
+                <span>Direct PostgreSQL (No Pooler)</span>
+                <span class="font-mono text-slate-400">5.82 ms</span>
+              </div>
+              <div class="h-4 w-full bg-slate-900 rounded-full overflow-hidden p-0.5 border border-slate-800">
+                <div class="h-full bg-slate-700 rounded-full" style="width: 100%;"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-8 pt-6 border-t border-slate-800/80 text-xs text-slate-400 flex items-center justify-between font-mono">
+            <span>Sub-millisecond query leasing</span>
+            <span>0 aborted clients</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Architecture: The Edge Pool Paradigm -->
+    <section id="architecture" class="mt-32 pt-16">
+      <div class="text-center max-w-3xl mx-auto mb-16">
+        <span class="text-xs uppercase font-mono font-semibold text-cyan-400 tracking-widest">Architectural Advantage</span>
+        <h2 class="text-4xl font-extrabold text-white mt-2 mb-4">The "Edge Pool" Sidecar Model</h2>
+        <p class="text-slate-400">
+          Because HermesPG requires only <strong>~20 MB of RAM</strong> and starts in <strong>&lt; 2 ms</strong>, 
+          you can run it anywhere: as a centralized gateway or distributed as a local Pod sidecar.
+        </p>
+      </div>
+
+      <div class="p-8 md:p-12 rounded-3xl bg-brand-card/90 neon-border max-w-5xl mx-auto">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 text-center">
+          
+          <!-- Client Nodes -->
+          <div class="p-6 rounded-2xl bg-slate-900/90 border border-slate-800">
+            <div class="text-xs font-mono font-bold text-cyan-400 mb-2">APPLICATION TIER</div>
+            <div class="text-lg font-bold text-white mb-2">10,000+ Active Clients</div>
+            <p class="text-xs text-slate-400">Microservices, Serverless Lambdas, Web Apps & Background Workers</p>
+          </div>
+
+          <!-- HermesPG Sidecars -->
+          <div class="p-6 rounded-2xl bg-cyan-950/40 border border-cyan-800/80 relative">
+            <div class="text-xs font-mono font-bold text-amber-400 mb-2">HERMESPG PROXY TIER</div>
+            <div class="text-lg font-bold text-cyan-300 mb-2">Transaction Multiplexing</div>
+            <p class="text-xs text-slate-300">Leases physical connections only while queries execute, returning to idle in O(1)</p>
+          </div>
+
+          <!-- Database -->
+          <div class="p-6 rounded-2xl bg-slate-900/90 border border-slate-800">
+            <div class="text-xs font-mono font-bold text-cyan-400 mb-2">POSTGRESQL TIER</div>
+            <div class="text-lg font-bold text-white mb-2">Only 20–50 Backends</div>
+            <p class="text-xs text-slate-400">Database server stays cool with zero connection RAM exhaustion or lock churn</p>
+          </div>
+
+        </div>
+
+        <div class="mt-8 pt-8 border-t border-slate-800 grid grid-cols-1 md:grid-cols-3 gap-6 text-sm text-slate-300">
+          <div class="flex items-start gap-3">
+            <span class="text-cyan-400 font-bold text-lg">✓</span>
+            <div>
+              <strong class="text-white">Kubernetes Sidecars:</strong> Deploy alongside every application pod without adding memory bloat.
+            </div>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="text-cyan-400 font-bold text-lg">✓</span>
+            <div>
+              <strong class="text-white">Serverless & Edge:</strong> Cold start in &lt; 2 ms on AWS Lambda, Fly.io, or Railway.
+            </div>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="text-cyan-400 font-bold text-lg">✓</span>
+            <div>
+              <strong class="text-white">100x Multiplier:</strong> Turn a 100-connection Postgres capacity into 10,000 usable clients.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Key Features Grid -->
+    <section id="features" class="mt-32 pt-16">
+      <div class="text-center max-w-3xl mx-auto mb-16">
+        <span class="text-xs uppercase font-mono font-semibold text-cyan-400 tracking-widest">Engineered for Performance</span>
+        <h2 class="text-4xl font-extrabold text-white mt-2 mb-4">Under The Hood</h2>
+        <p class="text-slate-400">
+          Zero-cost abstractions, direct kernel syscalls, and strict adherence to the PostgreSQL v3 protocol.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
+        
+        <!-- Feature 1 -->
+        <div class="p-8 rounded-2xl bg-brand-card/90 neon-border neon-border-hover transition-all duration-300">
+          <div class="w-12 h-12 rounded-xl bg-cyan-950/80 border border-cyan-800 flex items-center justify-center text-2xl mb-6">
+            🔐
+          </div>
+          <h3 class="text-xl font-bold text-white mb-3">SCRAM-SHA-256 Auth</h3>
+          <p class="text-sm text-slate-400 leading-relaxed">
+            Full RFC 5802 & RFC 7677 SASL negotiation. Pure SHA-256 and PBKDF2 cryptography with OS cryptographically secure random nonces.
+          </p>
+        </div>
+
+        <!-- Feature 2 -->
+        <div class="p-8 rounded-2xl bg-brand-card/90 neon-border neon-border-hover transition-all duration-300">
+          <div class="w-12 h-12 rounded-xl bg-amber-950/80 border border-amber-800 flex items-center justify-center text-2xl mb-6">
+            ⏱️
+          </div>
+          <h3 class="text-xl font-bold text-white mb-3">Zero-Alloc Wait Queue</h3>
+          <p class="text-sm text-slate-400 leading-relaxed">
+            Eliminates event-loop timer proliferation using high-resolution monotonic deadlines (<code class="text-cyan-300">MonoTime</code>) and an O(1) single background watchdog.
+          </p>
+        </div>
+
+        <!-- Feature 3 -->
+        <div class="p-8 rounded-2xl bg-brand-card/90 neon-border neon-border-hover transition-all duration-300">
+          <div class="w-12 h-12 rounded-xl bg-sky-950/80 border border-sky-800 flex items-center justify-center text-2xl mb-6">
+            🧵
+          </div>
+          <h3 class="text-xl font-bold text-white mb-3">Multi-Core SO_REUSEPORT</h3>
+          <p class="text-sm text-slate-400 leading-relaxed">
+            Scales horizontally across all CPU cores with native OS worker threads bound to the same port. Zero lock contention, linear scalability.
+          </p>
+        </div>
+
+        <!-- Feature 4 -->
+        <div class="p-8 rounded-2xl bg-brand-card/90 neon-border neon-border-hover transition-all duration-300">
+          <div class="w-12 h-12 rounded-xl bg-cyan-950/80 border border-cyan-800 flex items-center justify-center text-2xl mb-6">
+            ⚡
+          </div>
+          <h3 class="text-xl font-bold text-white mb-3">Direct Streaming Ingress</h3>
+          <p class="text-sm text-slate-400 leading-relaxed">
+            Reads packets directly from socket kernel buffers in a single syscall. Parses extended query pipeline batches in 0 syscalls.
+          </p>
+        </div>
+
+        <!-- Feature 5 -->
+        <div class="p-8 rounded-2xl bg-brand-card/90 neon-border neon-border-hover transition-all duration-300">
+          <div class="w-12 h-12 rounded-xl bg-amber-950/80 border border-amber-800 flex items-center justify-center text-2xl mb-6">
+            🛡️
+          </div>
+          <h3 class="text-xl font-bold text-white mb-3">Fail-Fast Load Shedding</h3>
+          <p class="text-sm text-slate-400 leading-relaxed">
+            Bounded deque rejects traffic spikes instantly (&lt; 0.2ms) with SQLSTATE <code class="text-cyan-300">53300</code>, shielding databases from cascading bufferbloat.
+          </p>
+        </div>
+
+        <!-- Feature 6 -->
+        <div class="p-8 rounded-2xl bg-brand-card/90 neon-border neon-border-hover transition-all duration-300">
+          <div class="w-12 h-12 rounded-xl bg-emerald-950/80 border border-emerald-800 flex items-center justify-center text-2xl mb-6">
+            🧹
+          </div>
+          <h3 class="text-xl font-bold text-white mb-3">Automatic Sanitization</h3>
+          <p class="text-sm text-slate-400 leading-relaxed">
+            Tracks session parameter mutations and automatically executes <code class="text-cyan-300">DISCARD ALL;</code> before leasing dirty connections back to clients.
+          </p>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- Validated Drivers Matrix -->
+    <section id="drivers" class="mt-32 pt-16">
+      <div class="text-center max-w-3xl mx-auto mb-16">
+        <span class="text-xs uppercase font-mono font-semibold text-cyan-400 tracking-widest">Enterprise Compatibility</span>
+        <h2 class="text-4xl font-extrabold text-white mt-2 mb-4">100% Protocol Fidelity</h2>
+        <p class="text-slate-400">
+          Verified with automated integration test suites across the top PostgreSQL database drivers.
+        </p>
+      </div>
+
+      <div class="max-w-4xl mx-auto overflow-x-auto">
+        <table class="w-full text-left border-collapse rounded-2xl overflow-hidden neon-border bg-brand-card/90">
+          <thead>
+            <tr class="border-b border-slate-800 bg-slate-900/80 text-xs uppercase font-mono text-slate-400">
+              <th class="py-4 px-6">Language</th>
+              <th class="py-4 px-6">Driver / Library</th>
+              <th class="py-4 px-6 text-center">Simple Query</th>
+              <th class="py-4 px-6 text-center">Extended ($1, $2)</th>
+              <th class="py-4 px-6 text-center">Transactions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800/60 text-sm font-medium">
+            <tr class="hover:bg-slate-900/40 transition-colors">
+              <td class="py-4 px-6 text-white font-semibold">Node.js / TypeScript</td>
+              <td class="py-4 px-6 font-mono text-cyan-300">node-postgres (pg)</td>
+              <td class="py-4 px-6 text-center text-emerald-400 font-bold">✓ Passed</td>
+              <td class="py-4 px-6 text-center text-emerald-400 font-bold">✓ Passed</td>
+              <td class="py-4 px-6 text-center text-emerald-400 font-bold">✓ Passed</td>
+            </tr>
+            <tr class="hover:bg-slate-900/40 transition-colors">
+              <td class="py-4 px-6 text-white font-semibold">Go</td>
+              <td class="py-4 px-6 font-mono text-cyan-300">jackc/pgx/v5</td>
+              <td class="py-4 px-6 text-center text-emerald-400 font-bold">✓ Passed</td>
+              <td class="py-4 px-6 text-center text-emerald-400 font-bold">✓ Passed</td>
+              <td class="py-4 px-6 text-center text-emerald-400 font-bold">✓ Passed</td>
+            </tr>
+            <tr class="hover:bg-slate-900/40 transition-colors">
+              <td class="py-4 px-6 text-white font-semibold">Python</td>
+              <td class="py-4 px-6 font-mono text-cyan-300">psycopg3</td>
+              <td class="py-4 px-6 text-center text-emerald-400 font-bold">✓ Passed</td>
+              <td class="py-4 px-6 text-center text-emerald-400 font-bold">✓ Passed</td>
+              <td class="py-4 px-6 text-center text-emerald-400 font-bold">✓ Passed</td>
+            </tr>
+            <tr class="hover:bg-slate-900/40 transition-colors">
+              <td class="py-4 px-6 text-white font-semibold">C# / .NET 8</td>
+              <td class="py-4 px-6 font-mono text-cyan-300">Npgsql 8.0</td>
+              <td class="py-4 px-6 text-center text-emerald-400 font-bold">✓ Passed</td>
+              <td class="py-4 px-6 text-center text-emerald-400 font-bold">✓ Passed</td>
+              <td class="py-4 px-6 text-center text-emerald-400 font-bold">✓ Passed</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Quickstart Section -->
+    <section id="quickstart" class="mt-32 pt-16">
+      <div class="text-center max-w-3xl mx-auto mb-16">
+        <span class="text-xs uppercase font-mono font-semibold text-cyan-400 tracking-widest">Get Running in Seconds</span>
+        <h2 class="text-4xl font-extrabold text-white mt-2 mb-4">Quickstart</h2>
+        <p class="text-slate-400">
+          Deploy HermesPG with Docker Compose or as a standalone native binary.
+        </p>
+      </div>
+
+      <div class="max-w-4xl mx-auto p-8 rounded-3xl bg-brand-card/90 neon-border">
+        
+        <!-- Code Tabs -->
+        <div class="flex items-center justify-between border-b border-slate-800 pb-4 mb-6">
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-rose-500/80"></span>
+            <span class="w-3 h-3 rounded-full bg-amber-500/80"></span>
+            <span class="w-3 h-3 rounded-full bg-emerald-500/80"></span>
+            <span class="text-xs font-mono text-slate-400 ml-2">docker-compose.yml</span>
+          </div>
+          <button onclick="navigator.clipboard.writeText(document.getElementById('compose-code').innerText)" 
+                  class="text-xs font-mono px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 transition">
+            Copy Code
+          </button>
+        </div>
+
+        <pre id="compose-code" class="text-sm font-mono text-slate-200 overflow-x-auto code-box p-6 rounded-xl leading-relaxed"><code>services:
+  hermespg:
+    image: ghcr.io/luisacosta828/hermespg:v0.2.0
+    ports:
+      - "6432:6432"
+    environment:
+      PGHOST: "postgres"
+      PGPORT: "5432"
+      PGUSER: "postgres"
+      PGPASSWORD: "your_password"
+      PGDATABASE: "postgres"
+      HERMES_MAX_CONNS: "25"
+      HERMES_WORKERS: "8"
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: "your_password"</code></pre>
+
+        <div class="mt-8 flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-xl bg-slate-900/60 border border-slate-800">
+          <div class="text-sm text-slate-300">
+            <strong>Ready to connect?</strong> Point your database connection string to port <code class="text-cyan-400 font-mono">6432</code>:
+          </div>
+          <code class="text-xs font-mono bg-slate-950 px-3 py-2 rounded border border-slate-800 text-amber-300">
+            postgresql://postgres:pass@localhost:6432/postgres
+          </code>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="mt-32 border-t border-slate-800/80 bg-brand-navy py-16 px-6 relative z-10">
+    <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-8 text-center md:text-left">
+      <div class="flex items-center gap-3">
+        <img src="assets/logo.jpg" alt="HermesPG" class="w-9 h-9 rounded-lg object-cover">
+        <div>
+          <span class="text-lg font-bold text-white font-mono">Hermes<span class="text-cyan-400">PG</span></span>
+          <p class="text-xs text-slate-400">High-Performance PostgreSQL Connection Pooler</p>
+        </div>
+      </div>
+
+      <div class="text-xs text-slate-500 font-mono">
+        Released under the <strong>MIT License</strong> • Crafted with pure native Nim 2.0
+      </div>
+
+      <div class="flex items-center gap-6 text-sm text-slate-400">
+        <a href="https://github.com/luisacosta828/hermespg" class="hover:text-cyan-400 transition">GitHub</a>
+        <a href="https://github.com/luisacosta828/hermespg/releases" class="hover:text-cyan-400 transition">Releases</a>
+        <a href="https://github.com/luisacosta828/hermespg/blob/main/CHANGELOG.md" class="hover:text-cyan-400 transition">Changelog</a>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

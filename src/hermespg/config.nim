@@ -4,7 +4,7 @@ import ./backend/pool
 import ./proxy
 
 const
-  HermesVersion* = "0.1.3"
+  HermesVersion* = "0.2.0"
   DefaultListenAddress* = "0.0.0.0"
   DefaultListenPort* = Port(6432)
   DefaultPgHost* = "127.0.0.1"

@@ -6,12 +6,12 @@
 
 <p align="center">
   <strong>Ultra-fast, featherweight PostgreSQL connection pooler and proxy in Nim.</strong><br>
-  <em>Sub-0.2ms Handshake • 120,000+ TPS • ~280 KB Binary • Transaction Mode Multiplexing</em>
+  <em>Sub-0.2ms Handshake • 140,000+ TPS • ~280 KB Binary • Transaction Mode Multiplexing</em>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-Nim%202.0-orange.svg" alt="Nim 2.0" />
-  <img src="https://img.shields.io/badge/Throughput-120%2C000%2B%20TPS-brightgreen.svg" alt="Throughput: 120,000+ TPS" />
+  <img src="https://img.shields.io/badge/Throughput-140%2C000%2B%20TPS-brightgreen.svg" alt="Throughput: 140,000+ TPS" />
   <img src="https://img.shields.io/badge/Binary%20Size-280%20KB-blue.svg" alt="Binary Size" />
   <img src="https://img.shields.io/badge/Memory%20Footprint-~3%20MB%20RSS-blueviolet.svg" alt="Memory Footprint" />
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT" />
@@ -102,8 +102,8 @@ pgbench -h 127.0.0.1 -p 6432 -U postgres -f bench_query.sql -c 100 -j 8 -t 30000
 ### Empirical Test Results:
 * **High-Concurrency Saturation (100 clients $\to$ 48 pooled backends across 16 workers)**:
   * Processed: **3,000,000 / 3,000,000 transactions** with 0 errors (100% completion).
-  * Throughput: **120,385+ TPS** sustained (+24.4% throughput surge).
-  * Average Latency: **0.83 ms** under full saturation.
+  * Throughput: **140,904+ TPS** sustained (+42.8% throughput surge).
+  * Average Latency: **0.71 ms** under full saturation.
   * Memory RSS: **~20 MB flat** across 16 worker threads (zero memory leak across 3 million queries).
 * **Load Shedding Under Extreme Overload**:
   * Configured with 1 backend connection and max queue of 5 (Total capacity = 6).

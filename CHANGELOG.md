@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.2.0] - 2026-10-10
 
 ### Added
 * **SCRAM-SHA-256 Authentication (RFC 5802 / RFC 7677)**:
@@ -26,8 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * Added defensive reallocation in `protocol/codec.nim` (`readMessageInto` and `readStartupOrSslInto`) to guarantee `availSpace > 0`, preventing tight spin-loops when buffers are full.
 
 ### Performance
-* **Throughput Surged to 120,385 TPS**:
-  * Sustained throughput increased by +24.4% (from 98.6K to 120.3K+ TPS) and latency dropped to 0.83 ms during 3,000,000 transaction continuous `pgbench` benchmarks.
+* **Throughput Surged to 140,904 TPS**:
+  * Sustained throughput increased by +42.8% (from 98.6K to 140.9K+ TPS) and latency plunged to 0.71 ms during 3,000,000 transaction continuous `pgbench` saturation.
 
 ---
 

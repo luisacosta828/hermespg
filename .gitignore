@@ -23,5 +23,6 @@ testresults/
 experiments/
 *.tar.gz
 *.zip
-*.html
+hermespg_guia_tecnica.html
 *.pdf
+!docs/**
