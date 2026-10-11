@@ -147,9 +147,11 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
   mClientsTotal.incMetric()
 
   var leasedConn: BackendConn = nil
+  var clientBuf: PacketBuffer = nil
+  var backendBuf: PacketBuffer = nil
   try:
-    let clientBuf = newPacketBuffer(65536)
-    let backendBuf = newPacketBuffer(65536)
+    clientBuf = acquirePacketBuffer(65536)
+    backendBuf = acquirePacketBuffer(65536)
 
     # 1. Initial client handshake
     let init = await clientSock.readStartupOrSslInto(clientBuf)
@@ -167,9 +169,8 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
 
     if requireAuth:
       mAuthAttemptsTotal.incMetric()
-      # Authenticate client via SCRAM-SHA-256
-      let startup = parseStartupMessage(clientBuf.data[4 ..< realInit.length])
-      let clientUser = startup.parameters.getOrDefault("user", "")
+      # Authenticate client via SCRAM-SHA-256 (zero-allocation scan)
+      let clientUser = findStartupUser(clientBuf.data.toOpenArray(4, realInit.length - 1))
       if expectedUser.len > 0 and clientUser != expectedUser:
         mAuthFailuresInvalidUser.incMetric()
         let errPkt = buildAuthErrorPacket(clientUser)
@@ -327,6 +328,10 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
     if verbose and not clientSock.isClosed:
       echo fmt"[CLIENT #{clientId}] Session error: {e.msg}"
   finally:
+    if clientBuf != nil:
+      releasePacketBuffer(clientBuf)
+    if backendBuf != nil:
+      releasePacketBuffer(backendBuf)
     mConnectedClients.decMetric()
     if leasedConn != nil:
       if leasedConn.lastStatus != Idle:
