@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * HermesPG now acts as an active gatekeeper on the proxy frontend: validates connecting clients against configured credentials using mutual SCRAM-SHA-256.
   * Added `buildAuthErrorPacket` in `protocol/messages.nim` producing standard PostgreSQL error packets with SQLSTATE `28P01` (`FATAL: password authentication failed`).
   * Immediate brute-force mitigation: unauthorized clients and invalid passwords are rejected in `< 2.1 µs` (mitigation capacity: ~493,000 blocks/sec per CPU core).
+* **Built-in Prometheus & OpenMetrics Exporter (`/metrics`)**:
+  * Implemented lock-free, zero-allocation metrics engine in `metrics.nim` utilizing hardware atomics (`std/atomics.Atomic[int]`) with zero GC overhead in the query dispatch path.
+  * Exposes 21+ granular metrics adhering to OpenMetrics specification covering active/idle pooled backends, fast-path vs slow-path acquisition rates, queue depth, fail-fast load shedding rejections (SQLSTATE `53300`), client connections, throughput (TPS/QPS), SCRAM security failure breakdowns, and watchdog auto-rollbacks.
+  * Dedicated lightweight asynchronous HTTP metrics server listening on port `9127` by default (`-m, --metrics-port`, `--metrics-bind`, `--no-metrics`).
+  * Added unit and integration tests in `tests/test_metrics.nim` verifying atomic operations, OpenMetrics format compliance, and non-blocking asynchronous HTTP scrapes.
+* **Turnkey Prometheus & Grafana Monitoring Stack**:
+  * Orchestrated multi-container observability stack in `deploy/monitoring/docker-compose.yml` with Prometheus 2.51 and Grafana 10.4.
+  * Automated Prometheus datasource provisioning and pre-configured live dashboard (`hermespg_overview.json`) featuring real-time stat cards, throughput time-series, pool saturation gauges, queue depth graphs, and authentication security tracking.
+  * Enabled anonymous viewer access in Grafana for instant zero-credential browser monitoring at `http://localhost:3000`.
 * **Cryptographic Efficiency Test Suite**:
   * Added `tests/bench_scram_efficiency.nim` benchmarking verification latency (3.72 µs/op, ~268,800 ops/sec per core) and rejection latency (2.03 µs/op).
   * Added `tests/test_scram_live.nim` for live end-to-end backend handshake integration tests against PostgreSQL.
@@ -22,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **Zero-Plaintext Gatekeeper Architecture**:
   * The proxy does not store or process passwords in plaintext during active client sessions; verification occurs strictly via precomputed cryptographic Verifiers (`StoredKey` and `ServerKey`).
   * Full protection against replay attacks, eavesdropping, and man-in-the-middle attacks via cryptographically random 24-byte nonces generated on both client and proxy sides.
+* **Granular Security Telemetry**:
+  * Added real-time tracking of authentication failures labeled by failure cause (`hermespg_auth_failures_total{reason="invalid_password"}` and `{reason="invalid_user"}`) to instantly expose brute-force or credential stuffing attacks.
 
 ---
 

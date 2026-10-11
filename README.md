@@ -59,6 +59,7 @@ Because HermesPG compiles to a standalone **287 KB static binary** and uses only
 ## ⚡ Key Features
 
 * **Full-Stack SCRAM-SHA-256 Authentication (RFC 5802 / RFC 7677)**: Dual-role SASL state machine supporting both secure PostgreSQL backend connections and strict frontend client verification. Features precomputed SCRAM Verifiers (`StoredKey` and `ServerKey`) delivering sub-4 µs verification latency (~268,000 verifications/sec per core) and immediate attack rejection (< 2.1 µs) with SQLSTATE `28P01` while completely eliminating runtime PBKDF2 overhead.
+* **Built-in Prometheus & OpenMetrics Exporter (`/metrics`)**: Lock-free, zero-allocation metrics engine backed by `std/atomics`, exposing live connection pool saturation, fast-path acquisition ratios, queue depth, load shedding rejections, SCRAM authentication telemetry, and watchdog rollbacks on an independent asynchronous HTTP listener (port `9127`).
 * **Zero-Allocation Monotonic Wait Queue**: Queue timeout management driven by high-resolution monotonic deadlines (`MonoTime`) and a single lightweight $O(1)$ watchdog, eliminating event-loop timer proliferation and keeping memory flat under multi-million transaction saturation.
 * **Native Multi-Core Worker Scaling**: Spawns multiple autonomous asynchronous worker threads bound to the listener port, scaling horizontally across all CPU cores with zero lock contention.
 * **Speculative Direct Streaming Ingress**: Single-syscall packet reads directly from kernel socket receive buffers, eliminating `MSG_PEEK` overhead and parsing pipelined extended query batches in 0 syscalls.
@@ -194,9 +195,60 @@ HermesPG supports full 12-factor configuration via CLI flags and environment var
 | `-i` | `--idle-tx-timeout` | `HERMES_IDLE_TX_TIMEOUT_MS`| `8000` | Max idle transaction time before auto-ROLLBACK (ms) |
 | `-r` | `--reset-query <sql>`| `HERMES_RESET_QUERY` | `DISCARD ALL;` | Session cleanup query executed before leasing dirty connections |
 | | `--no-reset` | | `false` | Disable automatic session cleanup query |
+| `-m` | `--metrics-port <port>` | `HERMES_METRICS_PORT` | `9127` | Listen port for built-in Prometheus metrics exporter |
+| | `--metrics-bind <host>` | `HERMES_METRICS_BIND` | `0.0.0.0` | Listen IP address for metrics HTTP server |
+| | `--no-metrics` | `HERMES_NO_METRICS` | `false` | Disable Prometheus metrics endpoint |
 | `-V` | `--verbose` | `HERMES_VERBOSE` | `false` | Enable detailed debug logging |
 | `-h` | `--help` | | | Show CLI help message and exit |
 | `-v` | `--version` | | | Show version and exit |
+
+---
+
+## 📊 Live Observability (Prometheus & Grafana Stack)
+
+HermesPG includes a high-performance, zero-allocation metrics engine that exposes real-time engine telemetry in **OpenMetrics** standard format at `http://localhost:9127/metrics`.
+
+### 🚀 Launching the Pre-Configured Monitoring Stack
+A complete containerized Prometheus and Grafana monitoring stack with automated datasource and dashboard provisioning is located in [`deploy/monitoring/`](deploy/monitoring/):
+
+```bash
+# 1. Start HermesPG with metrics active (port 9127 by default)
+./hermespg -U scram_user -W 'YourPassword' -p 6432 -c 10
+
+# 2. Launch Prometheus and Grafana in the background
+cd deploy/monitoring
+docker compose up -d
+```
+
+Open your browser to visualize live metrics:
+* **Grafana Dashboard**: [http://localhost:3000](http://localhost:3000) *(Anonymous Viewer mode active; no credentials needed)*
+* **Prometheus Targets & Queries**: [http://localhost:9090](http://localhost:9090)
+
+### 📈 Metrics Telemetry Catalog
+
+| Metric | Type | Subsystem | Description |
+| :--- | :---: | :--- | :--- |
+| `hermespg_pool_active_connections` | Gauge | Pool | Currently leased backend physical connections |
+| `hermespg_pool_idle_connections` | Gauge | Pool | Currently available idle backend connections |
+| `hermespg_pool_max_connections` | Gauge | Pool | Configured physical connection capacity |
+| `hermespg_pool_acquire_total` | Counter | Pool | Total connection acquisition requests |
+| `hermespg_pool_acquire_fast_path_total`| Counter | Pool | Fast-path synchronous acquisitions (LIFO stack cache hits) |
+| `hermespg_pool_acquire_slow_path_total`| Counter | Pool | Slow-path asynchronous acquisitions (queue dispatch) |
+| `hermespg_connected_clients` | Gauge | Traffic | Current active frontend client socket connections |
+| `hermespg_clients_total` | Counter | Traffic | Cumulative total client connections accepted |
+| `hermespg_transactions_total` | Counter | Traffic | Cumulative transactions completed (`Idle` state returns) |
+| `hermespg_queries_total` | Counter | Traffic | Cumulative query packets processed (`Q`, `P`, `B`, `E`, `S`) |
+| `hermespg_queue_waiting_clients` | Gauge | Queue | Clients currently waiting in queue for an available backend |
+| `hermespg_queue_max_size` | Gauge | Queue | Bounded queue capacity before immediate Load Shedding |
+| `hermespg_shedded_requests_total` | Counter | Load Shedding | Requests rejected immediately with SQLSTATE `53300` |
+| `hermespg_queue_timeouts_total` | Counter | Queue | Client acquisition requests that timed out waiting in queue |
+| `hermespg_auth_attempts_total` | Counter | Security | Total SCRAM-SHA-256 SASL authentication attempts |
+| `hermespg_auth_success_total` | Counter | Security | Successful client authentications |
+| `hermespg_auth_failures_total` | Counter | Security | Failed authentications by reason (`invalid_password`, `invalid_user`) |
+| `hermespg_idle_tx_rollbacks_total` | Counter | Watchdog | Abandoned in-progress transactions aborted with forced `ROLLBACK` |
+| `hermespg_dirty_resets_total` | Counter | Hygiene | Mutated connections sanitized with `DISCARD ALL;` before reuse |
+| `hermespg_uptime_seconds` | Counter | Runtime | Elapsed runtime in seconds since proxy boot |
+| `hermespg_workers_count` | Gauge | Runtime | Number of autonomous worker threads active |
 
 ---
 
@@ -214,16 +266,16 @@ HermesPG follows an iterative, production-grade development roadmap:
        ├── Transaction state pinning & dirty session tracking
        ├── Bounded O(1) wait queue & Fail-Fast Load Shedding
        ├── Rogue transaction watchdog (auto-ROLLBACK)
-       ├── 301 KB Docker Scratch container & 5,500+ sustained TPS
+       ├── 301 KB Docker Scratch container & 140,000+ sustained TPS
        └── Multi-language driver verification (Node, Go, Python, C#)
 
-  [x] Phase 2: Modern Authentication & Security (Current Release)
+  [x] Phase 2: Modern Authentication & Observability (Current Release)
        ├── Native SCRAM-SHA-256 backend authentication (RFC 5802 / RFC 7677)
        ├── Full SASL Server frontend gatekeeper mode with sub-4 µs verification
        ├── Zero-plaintext precomputed Verifiers (StoredKey & ServerKey)
        ├── Instant brute-force & wrong password mitigation (SQLSTATE 28P01 in < 2.1 µs)
-       └── Independent thread-local verifiers with 0 cross-thread contention
-
+       ├── Built-in lock-free Prometheus & OpenMetrics Exporter (/metrics on port 9127)
+       └── Containerized Prometheus + Grafana monitoring stack with pre-built dashboard
 
   [ ] Phase 3: Session Pooling & Operational Controls (Planned)
        ├── Session-Level Pooling mode (for stateful legacy applications)
@@ -247,6 +299,8 @@ nim c -r tests/test_protocol.nim
 nim c -r tests/test_config.nim
 nim c -r tests/test_pool.nim
 nim c -r tests/test_extended_query.nim
+nim c -r tests/test_scram.nim
+nim c -r tests/test_metrics.nim
 ```
 
 ---

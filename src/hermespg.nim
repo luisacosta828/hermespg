@@ -1,9 +1,21 @@
 import std/[asyncdispatch, strformat]
 import hermespg/proxy
 import hermespg/config
+import hermespg/metrics
 
 when defined(posix):
   import std/posix
+
+type
+  MetricsThreadArgs = object
+    port: Port
+    bindAddr: string
+
+var metricsThread: Thread[MetricsThreadArgs]
+
+proc metricsWorker(args: MetricsThreadArgs) {.thread.} =
+  {.cast(gcsafe).}:
+    waitFor startMetricsServer(args.port, args.bindAddr)
 
 proc raiseFileDescriptorLimit() =
   ## Automatically raises open file/socket descriptor limit on Linux (RLIMIT_NOFILE)
@@ -34,6 +46,15 @@ proc main() =
 
   setControlCHook(onControlC)
   raiseFileDescriptorLimit()
+
+  if serverConfig.metricsEnabled:
+    initMetrics(
+      serverConfig.poolSettings.maxConnections,
+      serverConfig.poolSettings.maxQueueSize,
+      serverConfig.workers
+    )
+    let mArgs = MetricsThreadArgs(port: serverConfig.metricsPort, bindAddr: serverConfig.metricsBind)
+    createThread(metricsThread, metricsWorker, mArgs)
 
   if serverConfig.workers <= 1:
     waitFor startServer(serverConfig)

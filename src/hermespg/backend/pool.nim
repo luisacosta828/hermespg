@@ -2,6 +2,7 @@
 import std/[asyncnet, asyncdispatch, strformat, deques, monotimes, times]
 import ../protocol/messages
 import ./connection
+import ../metrics
 
 type
   AcquireStatus* = enum
@@ -48,6 +49,7 @@ proc checkTimeouts(pool: ConnectionPool) =
     let first = pool.waitQueue.peekFirst()
     if now >= first.deadline:
       let client = pool.waitQueue.popFirst()
+      mWaitingClients.setMetric(pool.waitQueue.len)
       if not client.fut.finished:
         client.fut.complete(nil)
     else:
@@ -92,8 +94,12 @@ proc prewarm*(pool: ConnectionPool): Future[void] {.async.} =
         connId
       )
       pool.idleConns.add(conn)
+      mIdleConnections.setMetric(pool.idleConns.len)
+      mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
     except CatchableError as e:
       dec pool.activeCount
+      mIdleConnections.setMetric(pool.idleConns.len)
+      mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
       raise e
 
 proc tryAcquireFast*(pool: ConnectionPool, conn: var BackendConn): bool {.inline.} =
@@ -106,9 +112,15 @@ proc tryAcquireFast*(pool: ConnectionPool, conn: var BackendConn): bool {.inline
     let c = pool.idleConns.pop()
     if c.isAlive and not c.socket.isClosed and not c.isDirty:
       conn = c
+      mAcquireTotal.incMetric()
+      mAcquireFastPathTotal.incMetric()
+      mIdleConnections.setMetric(pool.idleConns.len)
+      mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
       return true
     else:
       dec pool.activeCount
+      mIdleConnections.setMetric(pool.idleConns.len)
+      mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
 
   return false
 
@@ -121,16 +133,25 @@ proc acquire*(pool: ConnectionPool): Future[AcquireResult] {.async.} =
     let conn = pool.idleConns.pop()
     if conn.isAlive and not conn.socket.isClosed:
       if pool.settings.resetBeforeFirstQuery and conn.isDirty and pool.settings.resetQuery.len > 0:
+        mDirtyResetsTotal.incMetric()
         let ok = await conn.executeSimple(pool.settings.resetQuery)
         if not ok:
           await conn.terminate()
           dec pool.activeCount
+          mIdleConnections.setMetric(pool.idleConns.len)
+          mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
           continue
         conn.isDirty = false
 
+      mAcquireTotal.incMetric()
+      mAcquireFastPathTotal.incMetric()
+      mIdleConnections.setMetric(pool.idleConns.len)
+      mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
       return AcquireResult(status: AcquireOk, conn: conn)
     else:
       dec pool.activeCount
+      mIdleConnections.setMetric(pool.idleConns.len)
+      mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
 
   # 2. Open new physical connection if capacity permits
   if pool.activeCount < pool.settings.maxConnections:
@@ -146,13 +167,19 @@ proc acquire*(pool: ConnectionPool): Future[AcquireResult] {.async.} =
         pool.settings.database,
         connId
       )
+      mAcquireTotal.incMetric()
+      mIdleConnections.setMetric(pool.idleConns.len)
+      mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
       return AcquireResult(status: AcquireOk, conn: conn)
     except CatchableError as e:
       dec pool.activeCount
+      mIdleConnections.setMetric(pool.idleConns.len)
+      mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
       return AcquireResult(status: AcquireFailed, conn: nil, errorMsg: e.msg)
 
   # 3. Fail-Fast overload protection (O(1) Load Shedding)
   if pool.waitQueue.len >= pool.settings.maxQueueSize:
+    mSheddedRequestsTotal.incMetric()
     return AcquireResult(status: AcquireQueueFull, conn: nil)
 
   # 4. Enqueue in O(1) deque with monotonic deadline
@@ -162,13 +189,20 @@ proc acquire*(pool: ConnectionPool): Future[AcquireResult] {.async.} =
     deadline: deadline
   )
   pool.waitQueue.addLast(pending)
+  mWaitingClients.setMetric(pool.waitQueue.len)
 
   let conn = await pending.fut
+  mWaitingClients.setMetric(pool.waitQueue.len)
   if conn == nil:
     if pool.isShuttingDown:
       return AcquireResult(status: AcquireShuttingDown, conn: nil)
+    mQueueTimeoutsTotal.incMetric()
     return AcquireResult(status: AcquireTimeout, conn: nil)
 
+  mAcquireTotal.incMetric()
+  mAcquireSlowPathTotal.incMetric()
+  mIdleConnections.setMetric(pool.idleConns.len)
+  mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
   return AcquireResult(status: AcquireOk, conn: conn)
 
 proc releaseFast*(pool: ConnectionPool, conn: BackendConn) {.inline.} =
@@ -180,6 +214,7 @@ proc releaseFast*(pool: ConnectionPool, conn: BackendConn) {.inline.} =
   let now = getMonoTime()
   while pool.waitQueue.len > 0:
     let nextClient = pool.waitQueue.popFirst()
+    mWaitingClients.setMetric(pool.waitQueue.len)
     if not nextClient.fut.finished:
       if now > nextClient.deadline:
         nextClient.fut.complete(nil)
@@ -188,6 +223,8 @@ proc releaseFast*(pool: ConnectionPool, conn: BackendConn) {.inline.} =
       return
 
   pool.idleConns.add(conn)
+  mIdleConnections.setMetric(pool.idleConns.len)
+  mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
 
 proc release*(pool: ConnectionPool, conn: BackendConn, dirty = false) {.async.} =
   if conn == nil:
@@ -195,6 +232,8 @@ proc release*(pool: ConnectionPool, conn: BackendConn, dirty = false) {.async.} 
 
   if not conn.isAlive or conn.socket.isClosed:
     dec pool.activeCount
+    mIdleConnections.setMetric(pool.idleConns.len)
+    mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
     if pool.waitQueue.len > 0 and not pool.isShuttingDown:
       asyncCheck (proc() {.async.} =
         let acq = await pool.acquire()
@@ -206,29 +245,36 @@ proc release*(pool: ConnectionPool, conn: BackendConn, dirty = false) {.async.} 
   conn.isDirty = conn.isDirty or dirty
 
   if conn.lastStatus != Idle:
+    mIdleTxRollbacksTotal.incMetric()
     discard await conn.executeSimple("ROLLBACK;")
     conn.isDirty = true
 
   if pool.isShuttingDown:
     await conn.terminate()
     dec pool.activeCount
+    mIdleConnections.setMetric(pool.idleConns.len)
+    mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
     return
 
   # Dispatch directly to next waiting client in O(1)
   let now = getMonoTime()
   while pool.waitQueue.len > 0:
     let nextClient = pool.waitQueue.popFirst()
+    mWaitingClients.setMetric(pool.waitQueue.len)
     if not nextClient.fut.finished:
       if now > nextClient.deadline:
         nextClient.fut.complete(nil)
         continue
       if pool.settings.resetBeforeFirstQuery and conn.isDirty and pool.settings.resetQuery.len > 0:
+        mDirtyResetsTotal.incMetric()
         discard await conn.executeSimple(pool.settings.resetQuery)
         conn.isDirty = false
       nextClient.fut.complete(conn)
       return
 
   pool.idleConns.add(conn)
+  mIdleConnections.setMetric(pool.idleConns.len)
+  mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
 
 proc shutdown*(pool: ConnectionPool, graceTimeoutMs = 5000): Future[void] {.async.} =
   pool.isShuttingDown = true
@@ -237,11 +283,14 @@ proc shutdown*(pool: ConnectionPool, graceTimeoutMs = 5000): Future[void] {.asyn
     let pending = pool.waitQueue.popFirst()
     if not pending.fut.finished:
       pending.fut.complete(nil)
+  mWaitingClients.setMetric(0)
 
   for conn in pool.idleConns:
     await conn.terminate()
     dec pool.activeCount
   pool.idleConns.setLen(0)
+  mIdleConnections.setMetric(0)
+  mActiveConnections.setMetric(0)
 
   let checkInterval = 50
   var waited = 0

@@ -20,6 +20,9 @@ const
   DefaultResetBeforeFirstQuery* = true
   DefaultVerbose* = false
   DefaultWorkers* = 1
+  DefaultMetricsPort* = Port(9127)
+  DefaultMetricsBind* = "0.0.0.0"
+  DefaultMetricsEnabled* = true
 
 proc showVersion*() =
   echo fmt"HermesPG v{HermesVersion} - High-Performance PostgreSQL Connection Pooler & Proxy in Nim"
@@ -52,6 +55,11 @@ CONNECTION POOL & LOAD SHEDDING OPTIONS:
   -i, --idle-tx-timeout <ms>    Maximum idle transaction time before auto-ROLLBACK in ms (default: 8000, env: HERMES_IDLE_TX_TIMEOUT_MS)
   -r, --reset-query <sql>       Session cleanup query (default: "DISCARD ALL;")
       --no-reset                Disable automatic session cleanup before leasing connection
+
+METRICS & OBSERVABILITY OPTIONS:
+  -m, --metrics-port <port>     Listen port for Prometheus metrics exporter (default: 9127, env: HERMES_METRICS_PORT)
+      --metrics-bind <host>     Listen IP address for metrics HTTP server (default: 0.0.0.0, env: HERMES_METRICS_BIND)
+      --no-metrics              Disable built-in Prometheus metrics HTTP endpoint
 
 GENERAL OPTIONS:
   -h, --help                    Show this help message and exit
@@ -119,6 +127,11 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
   var resetQuery = getEnv("HERMES_RESET_QUERY", DefaultResetQuery)
   var resetBeforeFirstQuery = DefaultResetBeforeFirstQuery
   var workers = parsePositiveIntValue(getEnv("HERMES_WORKERS", $DefaultWorkers), "HERMES_WORKERS")
+  var metricsPort = parsePortValue(getEnv("HERMES_METRICS_PORT", $DefaultMetricsPort.int), "HERMES_METRICS_PORT")
+  var metricsBind = getEnv("HERMES_METRICS_BIND", DefaultMetricsBind)
+  var metricsEnabled = getEnv("HERMES_METRICS_ENABLED", "true").toLowerAscii notin ["0", "false", "no", "off"]
+  if getEnv("HERMES_NO_METRICS", "false").toLowerAscii in ["1", "true", "yes", "on"]:
+    metricsEnabled = false
 
   # Parse command-line options
   var p = initOptParser(cmdParams)
@@ -163,6 +176,12 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
         resetQuery = p.fetchVal("--reset-query")
       of "no-reset":
         resetBeforeFirstQuery = false
+      of "m", "metrics-port":
+        metricsPort = parsePortValue(p.fetchVal("--metrics-port"), "--metrics-port")
+      of "metrics-bind":
+        metricsBind = p.fetchVal("--metrics-bind")
+      of "no-metrics":
+        metricsEnabled = false
       of "V", "verbose":
         verbose = true
       else:
@@ -189,5 +208,8 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
     listenPort: listenPort,
     poolSettings: poolSettings,
     verbose: verbose,
-    workers: workers
+    workers: workers,
+    metricsPort: metricsPort,
+    metricsBind: metricsBind,
+    metricsEnabled: metricsEnabled
   )

@@ -1,0 +1,501 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "⚡ HermesPG Overview & Health",
+      "type": "row"
+    },
+    {
+      "id": 1,
+      "title": "Transactions / sec (TPS)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(hermespg_transactions_total[15s])",
+          "legendFormat": "TPS",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "blue", "value": 1000 }
+            ]
+          },
+          "unit": "reqps"
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Queries / sec (QPS)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(hermespg_queries_total[15s])",
+          "legendFormat": "QPS",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "purple", "value": 2000 }
+            ]
+          },
+          "unit": "reqps"
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Active Backend Conns",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "hermespg_pool_active_connections",
+          "legendFormat": "Active",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 8 },
+              { "color": "red", "value": 10 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Connected Clients",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "hermespg_connected_clients",
+          "legendFormat": "Clients",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short"
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Queue Depth",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "hermespg_queue_waiting_clients",
+          "legendFormat": "Waiting",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 50 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Uptime",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "hermespg_uptime_seconds",
+          "legendFormat": "Uptime",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "s"
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "title": "📈 Traffic & Throughput",
+      "type": "row"
+    },
+    {
+      "id": 7,
+      "title": "Traffic Throughput (Transactions & Queries per sec)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(hermespg_transactions_total[15s])",
+          "legendFormat": "Transactions/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(hermespg_queries_total[15s])",
+          "legendFormat": "Queries/s",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 15
+          },
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Connection Acquisition Path (Fast-Path vs Slow-Path)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(hermespg_pool_acquire_fast_path_total[15s])",
+          "legendFormat": "Fast-Path (Stack Hit)",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(hermespg_pool_acquire_slow_path_total[15s])",
+          "legendFormat": "Slow-Path (Queued)",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 20
+          },
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 102,
+      "title": "🏊 Connection Pool Saturation & Queuing",
+      "type": "row"
+    },
+    {
+      "id": 9,
+      "title": "Physical Connection Leases (Active vs Idle)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "hermespg_pool_active_connections",
+          "legendFormat": "Active (Leased)",
+          "refId": "A"
+        },
+        {
+          "expr": "hermespg_pool_idle_connections",
+          "legendFormat": "Idle (Available)",
+          "refId": "B"
+        },
+        {
+          "expr": "hermespg_pool_max_connections",
+          "legendFormat": "Pool Capacity",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 15
+          },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Wait Queue & Load Shedding Rejections (SQLSTATE 53300)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "hermespg_queue_waiting_clients",
+          "legendFormat": "Clients Waiting in Queue",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(hermespg_shedded_requests_total[15s])",
+          "legendFormat": "Load Shedded (Dropped/s)",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(hermespg_queue_timeouts_total[15s])",
+          "legendFormat": "Queue Timeouts/s",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20
+          },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "id": 103,
+      "title": "🛡️ SCRAM-SHA-256 Authentication & Security",
+      "type": "row"
+    },
+    {
+      "id": 11,
+      "title": "Authentication Attempts & Success Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(hermespg_auth_attempts_total[15s])",
+          "legendFormat": "Total Attempts/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(hermespg_auth_success_total[15s])",
+          "legendFormat": "Successful Auth/s",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20
+          },
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "Authentication Failures by Reason (SQLSTATE 28P01)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "hermespg_auth_failures_total{reason=\"invalid_password\"}",
+          "legendFormat": "Invalid Password",
+          "refId": "A"
+        },
+        {
+          "expr": "hermespg_auth_failures_total{reason=\"invalid_user\"}",
+          "legendFormat": "Invalid User / Protocol",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 25
+          },
+          "color": { "fixedColor": "red", "mode": "palette-classic" },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
+      "id": 104,
+      "title": "🧹 Watchdog & Session Hygiene",
+      "type": "row"
+    },
+    {
+      "id": 13,
+      "title": "Transaction Watchdog Auto-Rollbacks",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 33 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "hermespg_idle_tx_rollbacks_total",
+          "legendFormat": "Abandoned Tx Rollbacks",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+      }
+    },
+    {
+      "id": 14,
+      "title": "Dirty Connection Resets (DISCARD ALL)",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 33 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "hermespg_dirty_resets_total",
+          "legendFormat": "Sanitized Connections",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short"
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+      }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["hermespg", "postgresql", "connection-pool", "metrics"],
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {
+    "refresh_intervals": ["1s", "2s", "5s", "10s", "30s", "1m"]
+  },
+  "timezone": "browser",
+  "title": "HermesPG - Production Monitoring & Observability",
+  "uid": "hermespg-overview",
+  "version": 1
+}

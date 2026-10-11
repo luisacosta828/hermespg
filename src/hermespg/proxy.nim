@@ -2,6 +2,7 @@ import std/[asyncnet, asyncdispatch, strutils, strformat, tables, posix, natives
 import ./protocol/[messages, codec]
 import ./backend/[connection, pool]
 import ./crypto/scram
+import ./metrics
 
 type
   ServerConfig* = object
@@ -10,6 +11,10 @@ type
     poolSettings*: PoolSettings
     verbose*: bool
     workers*: int
+    metricsPort*: Port
+    metricsBind*: string
+    metricsEnabled*: bool
+
 
 var
   shutdownRequested* {.threadvar.}: bool
@@ -138,117 +143,118 @@ proc forwardBackendTurn*(leasedConn: BackendConn, clientSock: AsyncSocket, backe
 
 proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: ConnectionPool, verbose: bool): Future[void] {.async.} =
   optimizeSocket(clientSock)
-
-  let clientBuf = newPacketBuffer(65536)
-  let backendBuf = newPacketBuffer(65536)
-
-  # 1. Initial client handshake
-  let init = await clientSock.readStartupOrSslInto(clientBuf)
-  if init.length == 0:
-    clientSock.close()
-    return
-
-  # If client requests SSL, reply 'N' immediately
-  var realInit = init
-  if init.protoCode == SslRequestCode:
-    if not fastSendDirect(clientSock, cstring("N"), 1):
-      await clientSock.send("N")
-    realInit = await clientSock.readStartupOrSslInto(clientBuf)
-    if realInit.length == 0:
-      clientSock.close()
-      return
-
-  if requireAuth:
-    # Authenticate client via SCRAM-SHA-256
-    let startup = parseStartupMessage(clientBuf.data[4 ..< realInit.length])
-    let clientUser = startup.parameters.getOrDefault("user", "")
-    if expectedUser.len > 0 and clientUser != expectedUser:
-      let errPkt = buildAuthErrorPacket(clientUser)
-      await clientSock.send(errPkt)
-      clientSock.close()
-      return
-
-    # Step 1: Send AuthenticationSASL offer (SCRAM-SHA-256)
-    if not fastSendDirect(clientSock, unsafeAddr WireSaslOffer[0], WireSaslOffer.len):
-      await clientSock.send(WireSaslOffer)
-
-    # Step 2: Read SASLInitialResponse from client
-    let saslInitLen = await clientSock.readMessageInto(clientBuf)
-    if saslInitLen == 0 or clientBuf.data[0] != MsgPassword:
-      let errPkt = buildAuthErrorPacket(clientUser)
-      await clientSock.send(errPkt)
-      clientSock.close()
-      return
-
-    let mechEnd = clientBuf.data.find('\0', 5)
-    if mechEnd == -1 or clientBuf.data[5 ..< mechEnd] != "SCRAM-SHA-256":
-      let errPkt = buildAuthErrorPacket(clientUser)
-      await clientSock.send(errPkt)
-      clientSock.close()
-      return
-
-    let saslDataLen = int(readInt32BE(clientBuf.data, mechEnd + 1))
-    let dataStart = mechEnd + 5
-    if dataStart + saslDataLen > saslInitLen:
-      let errPkt = buildAuthErrorPacket(clientUser)
-      await clientSock.send(errPkt)
-      clientSock.close()
-      return
-    let clientFirst = clientBuf.data[dataStart ..< dataStart + saslDataLen]
-
-    var serverSession = newScramServerSession(scramVerifier)
-    let serverFirst = serverSession.processClientFirstAndBuildChallenge(clientFirst)
-
-    # Step 3: Send AuthenticationSASLContinue (11)
-    let continuePayload = writeInt32BE(11) & serverFirst
-    let continueMsg = PgMessage(
-      kind: MsgAuth,
-      length: int32(4 + continuePayload.len),
-      payload: continuePayload
-    )
-    let contBytes = encode(continueMsg)
-    if not fastSendDirect(clientSock, addr contBytes[0], contBytes.len):
-      await clientSock.send(contBytes)
-
-    # Step 4: Read SASLResponse from client
-    let saslRespLen = await clientSock.readMessageInto(clientBuf)
-    if saslRespLen == 0 or clientBuf.data[0] != MsgPassword:
-      let errPkt = buildAuthErrorPacket(clientUser)
-      await clientSock.send(errPkt)
-      clientSock.close()
-      return
-
-    let clientFinal = clientBuf.data[5 ..< saslRespLen]
-    let (valid, serverSigB64) = serverSession.verifyClientFinal(clientFinal)
-    if not valid:
-      let errPkt = buildAuthErrorPacket(clientUser)
-      await clientSock.send(errPkt)
-      clientSock.close()
-      return
-
-    # Step 5: Send AuthenticationSASLFinal (12) + prebuiltHandshake (AuthenticationOk, ParameterStatus, ReadyForQuery)
-    let finalPayload = writeInt32BE(12) & "v=" & serverSigB64
-    let finalMsg = PgMessage(
-      kind: MsgAuth,
-      length: int32(4 + finalPayload.len),
-      payload: finalPayload
-    )
-    let finalBytes = encode(finalMsg) & prebuiltHandshake
-    if not fastSendDirect(clientSock, addr finalBytes[0], finalBytes.len):
-      await clientSock.send(finalBytes)
-  else:
-    # Instant dispatch: send pre-assembled handshake in a single network syscall
-    if not fastSendDirect(clientSock, addr prebuiltHandshake[0], prebuiltHandshake.len):
-      await clientSock.send(addr prebuiltHandshake[0], prebuiltHandshake.len)
-
-
-  if verbose:
-    echo fmt"[CLIENT #{clientId}] Connected and authenticated (<0.2ms)"
-    flushFile(stdout)
+  mConnectedClients.incMetric()
+  mClientsTotal.incMetric()
 
   var leasedConn: BackendConn = nil
-
   try:
+    let clientBuf = newPacketBuffer(65536)
+    let backendBuf = newPacketBuffer(65536)
+
+    # 1. Initial client handshake
+    let init = await clientSock.readStartupOrSslInto(clientBuf)
+    if init.length == 0:
+      return
+
+    # If client requests SSL, reply 'N' immediately
+    var realInit = init
+    if init.protoCode == SslRequestCode:
+      if not fastSendDirect(clientSock, cstring("N"), 1):
+        await clientSock.send("N")
+      realInit = await clientSock.readStartupOrSslInto(clientBuf)
+      if realInit.length == 0:
+        return
+
+    if requireAuth:
+      mAuthAttemptsTotal.incMetric()
+      # Authenticate client via SCRAM-SHA-256
+      let startup = parseStartupMessage(clientBuf.data[4 ..< realInit.length])
+      let clientUser = startup.parameters.getOrDefault("user", "")
+      if expectedUser.len > 0 and clientUser != expectedUser:
+        mAuthFailuresInvalidUser.incMetric()
+        let errPkt = buildAuthErrorPacket(clientUser)
+        await clientSock.send(errPkt)
+        return
+
+      # Step 1: Send AuthenticationSASL offer (SCRAM-SHA-256)
+      if not fastSendDirect(clientSock, unsafeAddr WireSaslOffer[0], WireSaslOffer.len):
+        await clientSock.send(WireSaslOffer)
+
+      # Step 2: Read SASLInitialResponse from client
+      let saslInitLen = await clientSock.readMessageInto(clientBuf)
+      if saslInitLen == 0 or clientBuf.data[0] != MsgPassword:
+        mAuthFailuresInvalidUser.incMetric()
+        let errPkt = buildAuthErrorPacket(clientUser)
+        await clientSock.send(errPkt)
+        return
+
+      let mechEnd = clientBuf.data.find('\0', 5)
+      if mechEnd == -1 or clientBuf.data[5 ..< mechEnd] != "SCRAM-SHA-256":
+        mAuthFailuresInvalidUser.incMetric()
+        let errPkt = buildAuthErrorPacket(clientUser)
+        await clientSock.send(errPkt)
+        return
+
+      let saslDataLen = int(readInt32BE(clientBuf.data, mechEnd + 1))
+      let dataStart = mechEnd + 5
+      if dataStart + saslDataLen > saslInitLen:
+        mAuthFailuresInvalidUser.incMetric()
+        let errPkt = buildAuthErrorPacket(clientUser)
+        await clientSock.send(errPkt)
+        return
+      let clientFirst = clientBuf.data[dataStart ..< dataStart + saslDataLen]
+
+      var serverSession = newScramServerSession(scramVerifier)
+      let serverFirst = serverSession.processClientFirstAndBuildChallenge(clientFirst)
+
+      # Step 3: Send AuthenticationSASLContinue (11)
+      let continuePayload = writeInt32BE(11) & serverFirst
+      let continueMsg = PgMessage(
+        kind: MsgAuth,
+        length: int32(4 + continuePayload.len),
+        payload: continuePayload
+      )
+      let contBytes = encode(continueMsg)
+      if not fastSendDirect(clientSock, addr contBytes[0], contBytes.len):
+        await clientSock.send(contBytes)
+
+      # Step 4: Read SASLResponse from client
+      let saslRespLen = await clientSock.readMessageInto(clientBuf)
+      if saslRespLen == 0 or clientBuf.data[0] != MsgPassword:
+        mAuthFailuresInvalidPass.incMetric()
+        let errPkt = buildAuthErrorPacket(clientUser)
+        await clientSock.send(errPkt)
+        return
+
+      let clientFinal = clientBuf.data[5 ..< saslRespLen]
+      let (valid, serverSigB64) = serverSession.verifyClientFinal(clientFinal)
+      if not valid:
+        mAuthFailuresInvalidPass.incMetric()
+        let errPkt = buildAuthErrorPacket(clientUser)
+        await clientSock.send(errPkt)
+        return
+
+      mAuthSuccessTotal.incMetric()
+
+      # Step 5: Send AuthenticationSASLFinal (12) + prebuiltHandshake (AuthenticationOk, ParameterStatus, ReadyForQuery)
+      let finalPayload = writeInt32BE(12) & "v=" & serverSigB64
+      let finalMsg = PgMessage(
+        kind: MsgAuth,
+        length: int32(4 + finalPayload.len),
+        payload: finalPayload
+      )
+      let finalBytes = encode(finalMsg) & prebuiltHandshake
+      if not fastSendDirect(clientSock, addr finalBytes[0], finalBytes.len):
+        await clientSock.send(finalBytes)
+    else:
+      # Instant dispatch: send pre-assembled handshake in a single network syscall
+      if not fastSendDirect(clientSock, addr prebuiltHandshake[0], prebuiltHandshake.len):
+        await clientSock.send(addr prebuiltHandshake[0], prebuiltHandshake.len)
+
+    if verbose:
+      echo fmt"[CLIENT #{clientId}] Connected and authenticated (<0.2ms)"
+      flushFile(stdout)
+
     while not clientSock.isClosed and not shutdownRequested:
       # Read client query packet
       let cMsgLen = await clientSock.readMessageInto(clientBuf)
@@ -278,6 +284,8 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
             clientSock.close()
             return
 
+      mQueriesTotal.incMetric()
+
       # If Parse with named statement, mark connection dirty
       if msgKind == MsgParse and cMsgLen > 5 and clientBuf.data[5] != '\0':
         leasedConn.isDirty = true
@@ -293,6 +301,7 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
           let nextLen = await clientSock.readMessageInto(clientBuf)
           if nextLen == 0:
             break
+          mQueriesTotal.incMetric()
           currentKind = clientBuf.data[0]
           if currentKind == MsgParse and nextLen > 5 and clientBuf.data[5] != '\0':
             leasedConn.isDirty = true
@@ -307,6 +316,7 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
 
       if leasedConn.lastStatus == Idle:
         # Session back to Idle ('I'): release backend back to pool immediately!
+        mTransactionsTotal.incMetric()
         if not leasedConn.isDirty:
           pool.releaseFast(leasedConn)
         else:
@@ -317,8 +327,10 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
     if verbose and not clientSock.isClosed:
       echo fmt"[CLIENT #{clientId}] Session error: {e.msg}"
   finally:
+    mConnectedClients.decMetric()
     if leasedConn != nil:
       if leasedConn.lastStatus != Idle:
+        mIdleTxRollbacksTotal.incMetric()
         discard await leasedConn.executeSimple("ROLLBACK;")
       await pool.release(leasedConn, dirty = true)
       leasedConn = nil

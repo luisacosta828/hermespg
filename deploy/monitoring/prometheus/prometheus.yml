@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 2s
+  evaluation_interval: 2s
+
+scrape_configs:
+  - job_name: 'hermespg'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:9127']
+        labels:
+          instance: 'hermespg-local'
+          app: 'hermespg'
+          cluster: 'local-dev'
