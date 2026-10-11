@@ -55,3 +55,31 @@ suite "SCRAM-SHA-256 and Cryptographic Primitives":
     # Reject tampered server signature
     let invalidServerFinal = "v=INVALID_SIGNATURE_TAMPERED_A=="
     check not client.verifyServerFinalMessage(invalidServerFinal)
+
+  test "Full mutual SCRAM-SHA-256 exchange between Client and Server":
+    let verifier = generateVerifier("mysecretpassword")
+    var server = newScramServerSession(verifier)
+    var client = newScramClient("myuser", "mysecretpassword")
+
+    # 1. Client first
+    let clientFirst = client.buildClientFirstMessage()
+    # 2. Server challenge
+    let serverFirst = server.processClientFirstAndBuildChallenge(clientFirst)
+    # 3. Client final
+    let clientFinal = client.processServerFirstAndBuildFinal(serverFirst)
+    # 4. Server verify
+    let (valid, serverSig) = server.verifyClientFinal(clientFinal)
+    check valid == true
+    check client.verifyServerFinalMessage("v=" & serverSig) == true
+
+  test "Server rejects invalid password with ClientProof mismatch":
+    let verifier = generateVerifier("correctpassword")
+    var server = newScramServerSession(verifier)
+    var badClient = newScramClient("myuser", "wrongpassword")
+
+    let clientFirst = badClient.buildClientFirstMessage()
+    let serverFirst = server.processClientFirstAndBuildChallenge(clientFirst)
+    let clientFinal = badClient.processServerFirstAndBuildFinal(serverFirst)
+    let (valid, _) = server.verifyClientFinal(clientFinal)
+    check valid == false
+

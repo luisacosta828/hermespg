@@ -149,3 +149,89 @@ proc verifyServerFinalMessage*(state: ScramClientState, serverFinalMsg: string):
       copyMem(addr expectedStr[0], unsafeAddr state.serverSignature[0], 32)
       return sigB64 == encode(expectedStr)
   return false
+
+type
+  ScramVerifier* = object
+    salt*: string
+    iterations*: int
+    storedKey*: array[32, char]
+    serverKey*: array[32, char]
+
+  ScramServerSession* = object
+    verifier*: ScramVerifier
+    serverNonce*: string
+    clientFirstBare*: string
+    serverFirst*: string
+    combinedNonce*: string
+
+proc generateVerifier*(password: string, salt = "", iterations = 4096): ScramVerifier =
+  ## Precomputes SCRAM-SHA-256 verifier (salt, StoredKey, ServerKey) from plaintext password.
+  ## Computed once during startup so individual client handshakes never pay PBKDF2 cost.
+  let s = if salt.len > 0: salt else: generateClientNonce(16)
+  let saltedPass = pbkdf2HmacSha256(password, s, iterations)
+  let clientKey = hmacSha256(saltedPass, "Client Key")
+  let storedKey = sha256(clientKey)
+  let serverKey = hmacSha256(saltedPass, "Server Key")
+  ScramVerifier(
+    salt: s,
+    iterations: iterations,
+    storedKey: storedKey,
+    serverKey: serverKey
+  )
+
+proc newScramServerSession*(verifier: ScramVerifier): ScramServerSession =
+  ## Creates a new server-side SCRAM handshake session for an incoming client
+  ScramServerSession(
+    verifier: verifier,
+    serverNonce: generateClientNonce(24)
+  )
+
+proc processClientFirstAndBuildChallenge*(state: var ScramServerSession, clientFirstMsg: string): string =
+  ## Parses client-first-message (e.g. "n,,n=user,r=clientNonce")
+  ## Returns server-first-message: "r=clientNonce+serverNonce,s=saltB64,i=iterations"
+  let bare = if clientFirstMsg.startsWith("n,,"): clientFirstMsg[3 .. ^1]
+             elif clientFirstMsg.startsWith("y,,"): clientFirstMsg[3 .. ^1]
+             else: clientFirstMsg
+  state.clientFirstBare = bare
+  var clientNonce = ""
+  for part in bare.split(','):
+    if part.startsWith("r="):
+      clientNonce = part[2 .. ^1]
+  if clientNonce.len == 0:
+    raise newException(ValueError, "Missing client nonce in client-first-message")
+
+  state.combinedNonce = clientNonce & state.serverNonce
+  state.serverFirst = "r=" & state.combinedNonce & ",s=" & encode(state.verifier.salt) & ",i=" & $state.verifier.iterations
+  return state.serverFirst
+
+proc verifyClientFinal*(state: ScramServerSession, clientFinalMsg: string): tuple[valid: bool, serverSigB64: string] =
+  ## Parses client-final-message ("c=biws,r=combinedNonce,p=clientProof")
+  ## Recovers ClientKey and validates SHA256(ClientKey) == StoredKey
+  ## Returns (valid, serverSignatureBase64)
+  var clientProofB64 = ""
+  var clientFinalWithoutProof = ""
+  let pIdx = clientFinalMsg.find(",p=")
+  if pIdx == -1:
+    return (false, "")
+  clientFinalWithoutProof = clientFinalMsg[0 ..< pIdx]
+  clientProofB64 = clientFinalMsg[pIdx + 3 .. ^1]
+
+  let authMessage = state.clientFirstBare & "," & state.serverFirst & "," & clientFinalWithoutProof
+  let clientSignature = hmacSha256(state.verifier.storedKey, authMessage)
+  let clientProof = decode(clientProofB64)
+  if clientProof.len != 32:
+    return (false, "")
+
+  var recoveredClientKey: array[32, char]
+  for i in 0 ..< 32:
+    recoveredClientKey[i] = chr(ord(clientProof[i]) xor ord(clientSignature[i]))
+
+  let calculatedStoredKey = sha256(recoveredClientKey)
+  if calculatedStoredKey != state.verifier.storedKey:
+    return (false, "")
+
+  let serverSignature = hmacSha256(state.verifier.serverKey, authMessage)
+  var sigStr = newString(32)
+  copyMem(addr sigStr[0], unsafeAddr serverSignature[0], 32)
+  return (true, encode(sigStr))
+

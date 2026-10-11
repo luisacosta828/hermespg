@@ -1,6 +1,7 @@
 import std/[asyncnet, asyncdispatch, strutils, strformat, tables, posix, nativesockets]
 import ./protocol/[messages, codec]
 import ./backend/[connection, pool]
+import ./crypto/scram
 
 type
   ServerConfig* = object
@@ -14,6 +15,9 @@ var
   shutdownRequested* {.threadvar.}: bool
   shutdownFuture* {.threadvar.}: Future[void]
   prebuiltHandshake* {.threadvar.}: string
+  scramVerifier* {.threadvar.}: ScramVerifier
+  requireAuth* {.threadvar.}: bool
+  expectedUser* {.threadvar.}: string
 
 proc assemblePrebuiltHandshake(params: Table[string, string]): string =
   ## Combines AuthenticationOk, all ParameterStatus, BackendKeyData, and ReadyForQuery
@@ -46,6 +50,11 @@ proc assemblePrebuiltHandshake(params: Table[string, string]): string =
 
 const
   WireReadyIdle* = "\x5a\x00\x00\x00\x05I" # ReadyForQuery ('Z', 5, 'I')
+
+let
+  WireSaslOffer* = "R\x00\x00\x00\x17\x00\x00\x00\x0aSCRAM-SHA-256\x00\x00"
+
+
 
 proc forwardBackendTurn*(leasedConn: BackendConn, clientSock: AsyncSocket, backendBuf: PacketBuffer): Future[bool] {.async.} =
   ## Streams backend response chunks directly to client socket with speculative direct syscalls.
@@ -140,17 +149,98 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
     return
 
   # If client requests SSL, reply 'N' immediately
+  var realInit = init
   if init.protoCode == SslRequestCode:
     if not fastSendDirect(clientSock, cstring("N"), 1):
       await clientSock.send("N")
-    let realInit = await clientSock.readStartupOrSslInto(clientBuf)
+    realInit = await clientSock.readStartupOrSslInto(clientBuf)
     if realInit.length == 0:
       clientSock.close()
       return
 
-  # Instant dispatch: send pre-assembled handshake in a single network syscall
-  if not fastSendDirect(clientSock, addr prebuiltHandshake[0], prebuiltHandshake.len):
-    await clientSock.send(addr prebuiltHandshake[0], prebuiltHandshake.len)
+  if requireAuth:
+    # Authenticate client via SCRAM-SHA-256
+    let startup = parseStartupMessage(clientBuf.data[4 ..< realInit.length])
+    let clientUser = startup.parameters.getOrDefault("user", "")
+    if expectedUser.len > 0 and clientUser != expectedUser:
+      let errPkt = buildAuthErrorPacket(clientUser)
+      await clientSock.send(errPkt)
+      clientSock.close()
+      return
+
+    # Step 1: Send AuthenticationSASL offer (SCRAM-SHA-256)
+    if not fastSendDirect(clientSock, unsafeAddr WireSaslOffer[0], WireSaslOffer.len):
+      await clientSock.send(WireSaslOffer)
+
+    # Step 2: Read SASLInitialResponse from client
+    let saslInitLen = await clientSock.readMessageInto(clientBuf)
+    if saslInitLen == 0 or clientBuf.data[0] != MsgPassword:
+      let errPkt = buildAuthErrorPacket(clientUser)
+      await clientSock.send(errPkt)
+      clientSock.close()
+      return
+
+    let mechEnd = clientBuf.data.find('\0', 5)
+    if mechEnd == -1 or clientBuf.data[5 ..< mechEnd] != "SCRAM-SHA-256":
+      let errPkt = buildAuthErrorPacket(clientUser)
+      await clientSock.send(errPkt)
+      clientSock.close()
+      return
+
+    let saslDataLen = int(readInt32BE(clientBuf.data, mechEnd + 1))
+    let dataStart = mechEnd + 5
+    if dataStart + saslDataLen > saslInitLen:
+      let errPkt = buildAuthErrorPacket(clientUser)
+      await clientSock.send(errPkt)
+      clientSock.close()
+      return
+    let clientFirst = clientBuf.data[dataStart ..< dataStart + saslDataLen]
+
+    var serverSession = newScramServerSession(scramVerifier)
+    let serverFirst = serverSession.processClientFirstAndBuildChallenge(clientFirst)
+
+    # Step 3: Send AuthenticationSASLContinue (11)
+    let continuePayload = writeInt32BE(11) & serverFirst
+    let continueMsg = PgMessage(
+      kind: MsgAuth,
+      length: int32(4 + continuePayload.len),
+      payload: continuePayload
+    )
+    let contBytes = encode(continueMsg)
+    if not fastSendDirect(clientSock, addr contBytes[0], contBytes.len):
+      await clientSock.send(contBytes)
+
+    # Step 4: Read SASLResponse from client
+    let saslRespLen = await clientSock.readMessageInto(clientBuf)
+    if saslRespLen == 0 or clientBuf.data[0] != MsgPassword:
+      let errPkt = buildAuthErrorPacket(clientUser)
+      await clientSock.send(errPkt)
+      clientSock.close()
+      return
+
+    let clientFinal = clientBuf.data[5 ..< saslRespLen]
+    let (valid, serverSigB64) = serverSession.verifyClientFinal(clientFinal)
+    if not valid:
+      let errPkt = buildAuthErrorPacket(clientUser)
+      await clientSock.send(errPkt)
+      clientSock.close()
+      return
+
+    # Step 5: Send AuthenticationSASLFinal (12) + prebuiltHandshake (AuthenticationOk, ParameterStatus, ReadyForQuery)
+    let finalPayload = writeInt32BE(12) & "v=" & serverSigB64
+    let finalMsg = PgMessage(
+      kind: MsgAuth,
+      length: int32(4 + finalPayload.len),
+      payload: finalPayload
+    )
+    let finalBytes = encode(finalMsg) & prebuiltHandshake
+    if not fastSendDirect(clientSock, addr finalBytes[0], finalBytes.len):
+      await clientSock.send(finalBytes)
+  else:
+    # Instant dispatch: send pre-assembled handshake in a single network syscall
+    if not fastSendDirect(clientSock, addr prebuiltHandshake[0], prebuiltHandshake.len):
+      await clientSock.send(addr prebuiltHandshake[0], prebuiltHandshake.len)
+
 
   if verbose:
     echo fmt"[CLIENT #{clientId}] Connected and authenticated (<0.2ms)"
@@ -253,6 +343,14 @@ proc startServer*(config: ServerConfig) {.async.} =
     echo fmt"[OK] Connection established with PostgreSQL ({config.poolSettings.pgHost}:{config.poolSettings.pgPort.int})"
     echo fmt"[*] Pre-warmed {pool.idleConns.len} physical backend connections"
     echo fmt"[*] Pre-assembled binary handshake cached in memory: {prebuiltHandshake.len} bytes"
+
+    if config.poolSettings.password.len > 0:
+      requireAuth = true
+      expectedUser = config.poolSettings.user
+      scramVerifier = generateVerifier(config.poolSettings.password)
+      echo fmt"[*] SCRAM-SHA-256 Frontend authentication active for user '{expectedUser}'"
+    else:
+      requireAuth = false
   except CatchableError as e:
     echo fmt"[FATAL] Error connecting to PostgreSQL: {e.msg}"
     return

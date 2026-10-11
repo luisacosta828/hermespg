@@ -90,6 +90,18 @@ proc buildStaticErrorPacket(sqlState, message: string): string {.compileTime.} =
   beLen[3] = chr(totalLen and 0xFF)
   result = "E" & beLen & payload
 
+proc buildAuthErrorPacket*(username: string): string =
+  ## Generates standard PostgreSQL wire error packet for password authentication failure (SQLSTATE 28P01)
+  let payload = "SFATAL\0VFATAL\0C28P01\0Mpassword authentication failed for user \"" & username & "\"\0\0"
+  let totalLen = int32(4 + payload.len)
+  var beLen = newString(4)
+  beLen[0] = chr((totalLen shr 24) and 0xFF)
+  beLen[1] = chr((totalLen shr 16) and 0xFF)
+  beLen[2] = chr((totalLen shr 8) and 0xFF)
+  beLen[3] = chr(totalLen and 0xFF)
+  result = "E" & beLen & payload
+
+
 const
   # Pre-compiled packet: Queue acquisition timeout (SQLSTATE 53300: too_many_connections)
   WireTimeoutError* = buildStaticErrorPacket(
