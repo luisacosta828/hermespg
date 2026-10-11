@@ -124,6 +124,27 @@ type
 proc newPacketBuffer*(capacity = 65536): PacketBuffer =
   PacketBuffer(data: newString(capacity), rpos: 0, wpos: 0)
 
+var gPacketBufferPool {.threadvar.}: seq[PacketBuffer]
+
+proc acquirePacketBuffer*(capacity = 65536): PacketBuffer =
+  ## Retrieves a pre-allocated reusable PacketBuffer from thread-local pool.
+  ## Completely eliminates heap allocations on client session connections.
+  if gPacketBufferPool.len > 0:
+    result = gPacketBufferPool.pop()
+    result.rpos = 0
+    result.wpos = 0
+  else:
+    result = newPacketBuffer(capacity)
+
+proc releasePacketBuffer*(buf: PacketBuffer, defaultCap = 65536) =
+  ## Returns an active PacketBuffer to thread-local pool for reuse.
+  if buf != nil and gPacketBufferPool.len < 128:
+    buf.rpos = 0
+    buf.wpos = 0
+    if buf.data.len > defaultCap * 2:
+      buf.data.setLen(defaultCap)
+    gPacketBufferPool.add(buf)
+
 proc fastRecvDirect*(socket: AsyncSocket, buf: pointer, size: int): int {.inline.} =
   ## Attempts non-blocking socket recv directly from kernel buffer.
   ## Returns number of bytes read (>= 0), or -1 if data is not immediately available.
@@ -355,6 +376,41 @@ proc parseStartupMessage*(payload: string): StartupMessage =
     inc i # skip '\0'
 
     result.parameters[key] = val
+
+proc findStartupUser*(payload: openArray[char]): string =
+  ## Fast zero-allocation scanner that extracts the "user" parameter
+  ## directly from StartupMessage payload without building a Hash Table.
+  if payload.len < 4:
+    return ""
+  var i = 4
+  while i < payload.len:
+    if payload[i] == '\0':
+      break
+
+    let keyStart = i
+    while i < payload.len and payload[i] != '\0':
+      inc i
+    if i >= payload.len: break
+    let keyLen = i - keyStart
+    let isUser = (keyLen == 4 and
+                  payload[keyStart] == 'u' and
+                  payload[keyStart+1] == 's' and
+                  payload[keyStart+2] == 'e' and
+                  payload[keyStart+3] == 'r')
+    inc i # skip '\0'
+
+    let valStart = i
+    while i < payload.len and payload[i] != '\0':
+      inc i
+    if i >= payload.len: break
+    if isUser:
+      let valLen = i - valStart
+      result = newString(valLen)
+      if valLen > 0:
+        copyMem(addr result[0], unsafeAddr payload[valStart], valLen)
+      return result
+    inc i # skip '\0'
+
 
 proc encode*(msg: PgMessage): string {.inline.} =
   ## Serializes a PgMessage to wire bytes ready for transmission.

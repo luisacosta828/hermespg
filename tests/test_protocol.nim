@@ -35,6 +35,10 @@ suite "PostgreSQL Protocol Codec":
     check startup.parameters["user"] == "postgres"
     check startup.parameters["database"] == "my_database"
 
+    # Test fast zero-allocation findStartupUser
+    let user = findStartupUser(payload)
+    check user == "postgres"
+
   test "Detect SSLRequest from payload":
     let payload = writeInt32BE(SslRequestCode)
     let code = readInt32BE(payload, 0)
