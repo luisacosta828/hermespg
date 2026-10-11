@@ -1,74 +1,74 @@
 # 📊 HermesPG Monitoring Stack (Prometheus + Grafana)
 
-Este directorio contiene la pila de observabilidad completa para HermesPG, preconfigurada para recopilar métricas nativas en formato **OpenMetrics** cada 2 segundos y visualizarlas en un dashboard de Grafana con cero configuración manual.
+This directory contains the complete observability stack for HermesPG, pre-configured to scrape native metrics in **OpenMetrics** standard format every 2 seconds and visualize them in a Grafana dashboard with zero manual configuration.
 
 ---
 
-## 🚀 Inicio Rápido
+## 🚀 Quickstart
 
-### 1. Iniciar HermesPG con el Exportador de Métricas Activo
-HermesPG expone el endpoint `/metrics` en el puerto `9127` por defecto:
+### 1. Start HermesPG with Metrics Exporter Active
+HermesPG exposes the `/metrics` endpoint on port `9127` by default:
 
 ```bash
 ./hermespg -U scram_user -W 'HermesSecr3t!2026' -p 6432 -c 10
 ```
 
-Puedes verificar el payload de métricas directamente:
+You can verify the metrics payload directly:
 ```bash
 curl -s http://localhost:9127/metrics
 ```
 
-### 2. Levantar la Pila de Monitoreo
-Desde este directorio (`deploy/monitoring`):
+### 2. Launch the Monitoring Stack
+From this directory (`deploy/monitoring`):
 
 ```bash
 docker compose up -d
-# o alternativamente con podman:
+# or alternatively with podman:
 # podman-compose up -d
 ```
 
-### 3. Acceder a las Interfaces Web
+### 3. Access Web Interfaces
 - **Grafana Dashboard**: [http://localhost:3000](http://localhost:3000)
-  - *Acceso directo*: Anonymous Viewer habilitado (no requiere login).
-  - *Admin Login*: Usuario `admin`, Contraseña `admin`.
-  - *Dashboard precargado*: **HermesPG - Production Monitoring & Observability** (en la carpeta `HermesPG`).
+  - *Direct Access*: Anonymous Viewer mode enabled (no login credentials required).
+  - *Admin Login*: User `admin`, Password `admin`.
+  - *Preloaded Dashboard*: **HermesPG - Production Monitoring & Observability** (in the `HermesPG` folder).
 - **Prometheus UI**: [http://localhost:9090](http://localhost:9090)
-  - Target: [http://localhost:9090/targets](http://localhost:9090/targets) (verifica el estado UP de HermesPG).
+  - Targets: [http://localhost:9090/targets](http://localhost:9090/targets) (verify HermesPG UP status).
 
 ---
 
-## 📈 Paneles del Dashboard
+## 📈 Dashboard Panels
 
-El dashboard precargado (`hermespg_overview.json`) incluye visualización en tiempo real para:
+The pre-loaded dashboard (`hermespg_overview.json`) includes real-time visualizations for:
 
 1. **⚡ Overview & Health**:
-   - TPS (Transacciones por segundo en tiempo real: `rate(hermespg_transactions_total[15s])`).
-   - QPS (Consultas por segundo: `rate(hermespg_queries_total[15s])`).
-   - Conexiones Físicas Arrendadas vs Capacidad Máxima del Pool.
-   - Clientes Conectados activos en el frontend.
-   - Profundidad de la cola de espera (`Queue Depth`).
-   - Uptime acumulado del servidor proxy.
+   - TPS (Transactions per second in real time: `rate(hermespg_transactions_total[15s])`).
+   - QPS (Queries per second: `rate(hermespg_queries_total[15s])`).
+   - Leased Physical Backends vs Maximum Pool Capacity.
+   - Connected Clients active in frontend.
+   - Wait Queue Depth (`Queue Depth`).
+   - Proxy Server Uptime.
 
 2. **📈 Traffic & Throughput**:
-   - Rendimiento de consultas y transacciones por segundo.
-   - Ratio de adquisición Fast-Path (LIFO cache hit en RAM) vs Slow-Path (espera en cola asíncrona).
+   - Query and transaction rate per second.
+   - Fast-Path acquisition ratio (LIFO cache hit in RAM) vs Slow-Path (asynchronous queue wait).
 
 3. **🏊 Connection Pool Saturation & Queuing**:
-   - Distribución de conexiones activas (arrendadas) vs inactivas (idle disponibles).
-   - Clientes esperando en cola y tasa de peticiones descartadas por saturación (**Load Shedding** con SQLSTATE `53300`).
+   - Leased (active) vs idle available connection distribution.
+   - Queued clients and rate of requests rejected due to queue saturation (**Load Shedding** with SQLSTATE `53300`).
 
 4. **🛡️ SCRAM-SHA-256 Authentication & Security**:
-   - Tasa de intentos de autenticación exitosos vs rechazados.
-   - Desglose de fallos de seguridad por contraseña incorrecta (`invalid_password`) o usuario no autorizado (`invalid_user`) con SQLSTATE `28P01`.
+   - Successful vs rejected authentication attempt rates.
+   - Security failure breakdown by invalid password (`invalid_password`) or unauthorized user (`invalid_user`) with SQLSTATE `28P01`.
 
 5. **🧹 Watchdog & Session Hygiene**:
-   - Transacciones huérfanas abortadas automáticamente por el watchdog (`ROLLBACK`).
-   - Conexiones recicladas y desinfectadas con `DISCARD ALL` tras estados modificados.
+   - Abandoned transactions automatically rolled back by the watchdog (`ROLLBACK`).
+   - Mutated connections sanitized with `DISCARD ALL` prior to reuse.
 
 ---
 
-## 🛑 Detener la Pila
-Para detener los contenedores:
+## 🛑 Stopping the Stack
+To stop the monitoring containers:
 ```bash
 docker compose down
 ```
