@@ -40,9 +40,7 @@ jobs:
             -v "${{ github.workspace }}:/workspace" \
             -w /workspace \
             nimlang/nim:2.0.12-alpine \
-            sh -c "apk add --no-cache gcc musl-dev git && git config --global --add safe.directory '*' && nimble install -y --depsOnly && nim c -d:danger --opt:speed --passC:'-flto -fomit-frame-pointer -ffunction-sections -fdata-sections' --passL:'-flto -static -s -Wl,--gc-sections' -o:dist/${{ matrix.binary_name }} src/hermespg.nim"
-          
-          chmod +x dist/${{ matrix.binary_name }}
+            sh -c "apk add --no-cache gcc musl-dev git && git config --global --add safe.directory '*' && nimble install -y --depsOnly && nim c -d:danger --opt:speed --passC:'-flto -fomit-frame-pointer -ffunction-sections -fdata-sections' --passL:'-flto -static -s -Wl,--gc-sections' -o:dist/${{ matrix.binary_name }} src/hermespg.nim && chmod 777 dist/${{ matrix.binary_name }}"
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
@@ -71,9 +69,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Nim
-        uses: jirutka/setup-nim@v1
+        uses: iffy/install-nim@v5
         with:
-          nim-version: '2.0.12'
+          version: binary:2.0.12
 
       - name: Install dependencies & compile
         run: |
