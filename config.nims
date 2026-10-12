@@ -8,6 +8,10 @@ switch("panics", "on")
 if not defined(debug):
   switch("define", "danger")
   switch("opt", "speed")
-  switch("passC", "-flto -ffunction-sections -fdata-sections -O3")
-  switch("passL", "-flto -Wl,--gc-sections -s")
+  if defined(macosx) or defined(osx):
+    switch("passC", "-flto -O3")
+    switch("passL", "-flto -Wl,-dead_strip")
+  else:
+    switch("passC", "-flto -ffunction-sections -fdata-sections -O3")
+    switch("passL", "-flto -Wl,--gc-sections -s")
 

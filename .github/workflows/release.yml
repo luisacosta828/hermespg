@@ -81,9 +81,10 @@ jobs:
 
       - name: Install dependencies & compile
         run: |
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.nimble/bin:$PATH"
           mkdir -p dist
           nimble install -y --depsOnly
-          nim c -d:danger --opt:speed --passC:"-flto -fomit-frame-pointer" --passL:"-flto" -o:dist/${{ matrix.binary_name }} src/hermespg.nim
+          nim c -d:danger --opt:speed -o:dist/${{ matrix.binary_name }} src/hermespg.nim
           strip dist/${{ matrix.binary_name }} || true
           chmod +x dist/${{ matrix.binary_name }}
 
