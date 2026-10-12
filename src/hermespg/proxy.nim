@@ -2,9 +2,14 @@ import std/[asyncnet, asyncdispatch, strutils, strformat, tables, posix, natives
 import ./protocol/[messages, codec]
 import ./backend/[connection, pool]
 import ./crypto/scram
+import ./auth/catalog
 import ./metrics
 
 type
+  ProxyMode* = enum
+    ModeSidecar = "sidecar"
+    ModeGateway = "gateway"
+
   ServerConfig* = object
     listenAddress*: string
     listenPort*: Port
@@ -14,6 +19,8 @@ type
     metricsPort*: Port
     metricsBind*: string
     metricsEnabled*: bool
+    mode*: ProxyMode
+    authFile*: string
 
 
 var
@@ -23,6 +30,8 @@ var
   scramVerifier* {.threadvar.}: ScramVerifier
   requireAuth* {.threadvar.}: bool
   expectedUser* {.threadvar.}: string
+  activeMode* {.threadvar.}: ProxyMode
+  userCatalog* {.threadvar.}: UserCatalog
 
 proc assemblePrebuiltHandshake(params: Table[string, string]): string =
   ## Combines AuthenticationOk, all ParameterStatus, BackendKeyData, and ReadyForQuery
@@ -147,6 +156,7 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
   mClientsTotal.incMetric()
 
   var leasedConn: BackendConn = nil
+  var lastUsedConn: BackendConn = nil
   var clientBuf: PacketBuffer = nil
   var backendBuf: PacketBuffer = nil
   try:
@@ -167,15 +177,26 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
       if realInit.length == 0:
         return
 
+    var clientUser = ""
     if requireAuth:
       mAuthAttemptsTotal.incMetric()
       # Authenticate client via SCRAM-SHA-256 (zero-allocation scan)
-      let clientUser = findStartupUser(clientBuf.data.toOpenArray(4, realInit.length - 1))
-      if expectedUser.len > 0 and clientUser != expectedUser:
-        mAuthFailuresInvalidUser.incMetric()
-        let errPkt = buildAuthErrorPacket(clientUser)
-        await clientSock.send(errPkt)
-        return
+      clientUser = findStartupUser(clientBuf.data.toOpenArray(4, realInit.length - 1))
+
+      var activeVerifier: ScramVerifier
+      if activeMode == ModeGateway:
+        if not userCatalog.getVerifier(clientUser, activeVerifier):
+          mAuthFailuresInvalidUser.incMetric()
+          let errPkt = buildAuthErrorPacket(clientUser)
+          await clientSock.send(errPkt)
+          return
+      else:
+        if expectedUser.len > 0 and clientUser != expectedUser:
+          mAuthFailuresInvalidUser.incMetric()
+          let errPkt = buildAuthErrorPacket(clientUser)
+          await clientSock.send(errPkt)
+          return
+        activeVerifier = scramVerifier
 
       # Step 1: Send AuthenticationSASL offer (SCRAM-SHA-256)
       if not fastSendDirect(clientSock, unsafeAddr WireSaslOffer[0], WireSaslOffer.len):
@@ -205,7 +226,7 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
         return
       let clientFirst = clientBuf.data[dataStart ..< dataStart + saslDataLen]
 
-      var serverSession = newScramServerSession(scramVerifier)
+      var serverSession = newScramServerSession(activeVerifier)
       let serverFirst = serverSession.processClientFirstAndBuildChallenge(clientFirst)
 
       # Step 3: Send AuthenticationSASLContinue (11)
@@ -285,6 +306,41 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
             clientSock.close()
             return
 
+        lastUsedConn = leasedConn
+
+        # Gateway Strategy: Multi-Tenant Role Dispatching & Client Session Boundary Isolation
+        if activeMode == ModeGateway and clientUser.len > 0:
+          if leasedConn.lastClientId != clientId or leasedConn.currentRole != clientUser:
+            # Switching tenant or client session context: execute DISCARD ALL as standalone statement
+            # to wipe any temporary tables, prepared statements, and session GUC variables
+            # from previous client session before leasing connection.
+            if leasedConn.lastClientId != 0 and leasedConn.lastClientId != clientId:
+              discard await leasedConn.executeDiscardAll()
+              leasedConn.currentRole = ""
+
+            var setOk = true
+            if clientUser == pool.settings.user:
+              if leasedConn.currentRole.len > 0:
+                setOk = await leasedConn.executeDiscardAll()
+                leasedConn.currentRole = ""
+            elif leasedConn.currentRole != clientUser:
+              setOk = await leasedConn.executeSimple("SET ROLE " & quoteIdentifier(clientUser) & ";")
+              if setOk:
+                leasedConn.currentRole = clientUser
+
+            if not setOk:
+              let roleErrMsg = "permission denied to set role \"" & clientUser & "\""
+              let roleErrPkt = buildGenericErrorPacket("42501", roleErrMsg)
+              await clientSock.send(roleErrPkt)
+              await clientSock.send(WireReadyIdle)
+              leasedConn.lastClientId = 0
+              await pool.release(leasedConn, dirty = true)
+              leasedConn = nil
+              continue
+
+            leasedConn.lastClientId = clientId
+            leasedConn.isDirty = false
+
       mQueriesTotal.incMetric()
 
       # If Parse with named statement, mark connection dirty
@@ -337,8 +393,14 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
       if leasedConn.lastStatus != Idle:
         mIdleTxRollbacksTotal.incMetric()
         discard await leasedConn.executeSimple("ROLLBACK;")
+      leasedConn.lastClientId = 0
       await pool.release(leasedConn, dirty = true)
       leasedConn = nil
+
+    if activeMode == ModeGateway and lastUsedConn != nil and lastUsedConn.isAlive and not lastUsedConn.socket.isClosed:
+      if lastUsedConn.lastClientId == clientId:
+        lastUsedConn.isDirty = true
+        lastUsedConn.lastClientId = 0
 
     if not clientSock.isClosed:
       clientSock.close()
@@ -361,13 +423,25 @@ proc startServer*(config: ServerConfig) {.async.} =
     echo fmt"[*] Pre-warmed {pool.idleConns.len} physical backend connections"
     echo fmt"[*] Pre-assembled binary handshake cached in memory: {prebuiltHandshake.len} bytes"
 
-    if config.poolSettings.password.len > 0:
+    activeMode = config.mode
+    if activeMode == ModeGateway:
+      if config.authFile.len > 0:
+        echo fmt"[*] Gateway mode: Loading authentication catalog from '{config.authFile}'..."
+        userCatalog = loadAuthFile(config.authFile)
+        echo fmt"[*] Gateway catalog loaded: {userCatalog.len} tenant user accounts configured"
+      else:
+        echo "[FATAL] Gateway mode requires an authentication file (--auth-file <path>)"
+        return
       requireAuth = true
-      expectedUser = config.poolSettings.user
-      scramVerifier = generateVerifier(config.poolSettings.password)
-      echo fmt"[*] SCRAM-SHA-256 Frontend authentication active for user '{expectedUser}'"
+      echo "[*] Multi-tenant SCRAM-SHA-256 Frontend authentication enabled (Gateway Mode)"
     else:
-      requireAuth = false
+      if config.poolSettings.password.len > 0:
+        requireAuth = true
+        expectedUser = config.poolSettings.user
+        scramVerifier = generateVerifier(config.poolSettings.password)
+        echo fmt"[*] SCRAM-SHA-256 Frontend authentication active for user '{expectedUser}' (Sidecar Mode)"
+      else:
+        requireAuth = false
   except CatchableError as e:
     echo fmt"[FATAL] Error connecting to PostgreSQL: {e.msg}"
     return
@@ -384,7 +458,8 @@ proc startServer*(config: ServerConfig) {.async.} =
   server.listen(4096)
 
   let bindDisplay = if config.listenAddress.len > 0: config.listenAddress else: "0.0.0.0"
-  echo fmt"[*] Proxy listening on {bindDisplay}:{config.listenPort.int}"
+  let modeLabel = if config.mode == ModeGateway: "Gateway (Multi-Tenant)" else: "Sidecar (Micro-Pooler)"
+  echo fmt"[*] Proxy listening on {bindDisplay}:{config.listenPort.int} [{modeLabel}]"
   echo fmt"[*] Physical backends: {config.poolSettings.maxConnections} connections"
   echo fmt"[*] Bounded queue (Fail-Fast): {config.poolSettings.maxQueueSize} max pending clients"
   echo fmt"[*] Acquire timeout: {config.poolSettings.acquireTimeoutMs}ms"

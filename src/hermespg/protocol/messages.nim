@@ -101,8 +101,38 @@ proc buildAuthErrorPacket*(username: string): string =
   beLen[3] = chr(totalLen and 0xFF)
   result = "E" & beLen & payload
 
+proc buildGenericErrorPacket*(sqlState, message: string, severity = "ERROR"): string =
+  ## Generates standard PostgreSQL wire error packet for arbitrary SQLSTATE and message
+  let payload = "S" & severity & "\0V" & severity & "\0C" & sqlState & "\0M" & message & "\0\0"
+  let totalLen = int32(4 + payload.len)
+  var beLen = newString(4)
+  beLen[0] = chr((totalLen shr 24) and 0xFF)
+  beLen[1] = chr((totalLen shr 16) and 0xFF)
+  beLen[2] = chr((totalLen shr 8) and 0xFF)
+  beLen[3] = chr(totalLen and 0xFF)
+  result = "E" & beLen & payload
+
+proc buildStaticQueryPacket*(sql: string): string {.compileTime.} =
+  ## Pre-assembles binary wire representation for Simple Query MsgQuery ('Q') with payload sql & "\0"
+  let payload = sql & "\0"
+  let totalLen = int32(4 + payload.len)
+  var beLen = newString(4)
+  beLen[0] = chr((totalLen shr 24) and 0xFF)
+  beLen[1] = chr((totalLen shr 16) and 0xFF)
+  beLen[2] = chr((totalLen shr 8) and 0xFF)
+  beLen[3] = chr(totalLen and 0xFF)
+  result = "Q" & beLen & payload
 
 const
+  # Pre-compiled queries for zero-allocation session resets
+  SqlDiscardAll* = "DISCARD ALL;"
+  SqlResetRole* = "RESET ROLE;"
+
+let
+  WireDiscardAll* = buildStaticQueryPacket(SqlDiscardAll)
+  WireResetRole* = buildStaticQueryPacket(SqlResetRole)
+
+
   # Pre-compiled packet: Queue acquisition timeout (SQLSTATE 53300: too_many_connections)
   WireTimeoutError* = buildStaticErrorPacket(
     "53300",

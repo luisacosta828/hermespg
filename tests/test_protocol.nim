@@ -43,3 +43,17 @@ suite "PostgreSQL Protocol Codec":
     let payload = writeInt32BE(SslRequestCode)
     let code = readInt32BE(payload, 0)
     check code == SslRequestCode
+
+  test "Pre-computed wire query constants":
+    check SqlDiscardAll == "DISCARD ALL;"
+    check WireDiscardAll.len == 18 # 1 byte 'Q' + 4 bytes length + 13 bytes payload
+    check WireDiscardAll[0] == 'Q'
+    check readInt32BE(WireDiscardAll, 1) == 17
+    check WireDiscardAll[5 .. ^1] == "DISCARD ALL;\0"
+
+    check SqlResetRole == "RESET ROLE;"
+    check WireResetRole.len == 17 # 1 byte 'Q' + 4 bytes length + 12 bytes payload
+    check WireResetRole[0] == 'Q'
+    check readInt32BE(WireResetRole, 1) == 16
+    check WireResetRole[5 .. ^1] == "RESET ROLE;\0"
+

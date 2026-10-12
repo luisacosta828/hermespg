@@ -14,6 +14,8 @@ type
     lastStatus*: TransactionStatus
     backendPid*: int32
     secretKey*: int32
+    lastClientId*: int
+    currentRole*: string
     # Cold fields accessed rarely outside handshake
     parameters*: Table[string, string]
 
@@ -27,6 +29,8 @@ proc newBackendConn*(id: int): BackendConn =
     lastStatus: Idle,
     backendPid: 0,
     secretKey: 0,
+    lastClientId: 0,
+    currentRole: "",
     parameters: initTable[string, string]()
   )
 
@@ -59,6 +63,34 @@ proc executeSimple*(conn: BackendConn, sql: string): Future[bool] {.async.} =
   )
 
   await conn.socket.writeMessage(queryMsg)
+
+  var success = true
+  while true:
+    let msg = await conn.socket.readMessage()
+    if msg.length == 0:
+      conn.isAlive = false
+      return false
+
+    case msg.kind
+    of MsgErrorResponse:
+      success = false
+    of MsgReadyForQuery:
+      if msg.payload.len > 0:
+        conn.lastStatus = toTransactionStatus(msg.payload[0])
+      break
+    else:
+      discard
+
+  return success
+
+proc executeDiscardAll*(conn: BackendConn): Future[bool] {.async.} =
+  ## Zero-allocation execution of pre-computed DISCARD ALL; binary wire packet (WireDiscardAll).
+  ## Avoids string concatenation, PgMessage allocations, and framing on hot cleanup paths.
+  if not conn.isAlive or conn.socket.isClosed:
+    return false
+
+  if not fastSendDirect(conn.socket, unsafeAddr WireDiscardAll[0], WireDiscardAll.len):
+    await conn.socket.send(WireDiscardAll)
 
   var success = true
   while true:

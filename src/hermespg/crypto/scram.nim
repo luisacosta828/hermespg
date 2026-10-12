@@ -29,6 +29,14 @@ proc toHex*(data: openArray[char]): string =
   for c in data:
     result.add(toHex(ord(c), 2).toLowerAscii)
 
+proc constantTimeEquals*(a, b: openArray[char]): bool {.inline.} =
+  ## Constant-time comparison to prevent side-channel timing attacks
+  if a.len != b.len: return false
+  var diff = 0
+  for i in 0 ..< a.len:
+    diff = diff or (ord(a[i]) xor ord(b[i]))
+  return diff == 0
+
 proc hmacSha256*(key: openArray[char], msg: openArray[char]): array[32, char] =
   ## Computes HMAC-SHA-256 (RFC 2104) with 64-byte block size
   var k: array[64, char]
@@ -227,11 +235,58 @@ proc verifyClientFinal*(state: ScramServerSession, clientFinalMsg: string): tupl
     recoveredClientKey[i] = chr(ord(clientProof[i]) xor ord(clientSignature[i]))
 
   let calculatedStoredKey = sha256(recoveredClientKey)
-  if calculatedStoredKey != state.verifier.storedKey:
+  if not constantTimeEquals(calculatedStoredKey, state.verifier.storedKey):
     return (false, "")
 
   let serverSignature = hmacSha256(state.verifier.serverKey, authMessage)
   var sigStr = newString(32)
   copyMem(addr sigStr[0], unsafeAddr serverSignature[0], 32)
   return (true, encode(sigStr))
+
+proc formatScramSecret*(verifier: ScramVerifier): string =
+  ## Formats a ScramVerifier into PostgreSQL / PgBouncer standard SCRAM-SHA-256 secret representation:
+  ## "SCRAM-SHA-256$<iterations>:<saltB64>$<storedKeyB64>:<serverKeyB64>"
+  var storedKeyStr = newString(32)
+  copyMem(addr storedKeyStr[0], unsafeAddr verifier.storedKey[0], 32)
+  var serverKeyStr = newString(32)
+  copyMem(addr serverKeyStr[0], unsafeAddr verifier.serverKey[0], 32)
+  return "SCRAM-SHA-256$" & $verifier.iterations & ":" & encode(verifier.salt) & "$" & encode(storedKeyStr) & ":" & encode(serverKeyStr)
+
+proc parseScramSecret*(secret: string): ScramVerifier =
+  ## Parses a PostgreSQL / PgBouncer standard SCRAM-SHA-256 secret string:
+  ## "SCRAM-SHA-256$<iterations>:<saltB64>$<storedKeyB64>:<serverKeyB64>"
+  if not secret.startsWith("SCRAM-SHA-256$"):
+    raise newException(ValueError, "Secret does not start with 'SCRAM-SHA-256$'")
+  let rest = secret["SCRAM-SHA-256$".len .. ^1]
+  let dollarIdx = rest.find('$')
+  if dollarIdx == -1:
+    raise newException(ValueError, "Invalid SCRAM secret format: missing '$' separating salt and keys")
+  let iterAndSalt = rest[0 ..< dollarIdx]
+  let keys = rest[dollarIdx + 1 .. ^1]
+
+  let colonIter = iterAndSalt.find(':')
+  if colonIter == -1:
+    raise newException(ValueError, "Invalid SCRAM secret format: missing ':' between iterations and salt")
+  let iterations = parseInt(iterAndSalt[0 ..< colonIter])
+  let salt = decode(iterAndSalt[colonIter + 1 .. ^1])
+
+  let colonKeys = keys.find(':')
+  if colonKeys == -1:
+    raise newException(ValueError, "Invalid SCRAM secret format: missing ':' between StoredKey and ServerKey")
+  let storedKeyStr = decode(keys[0 ..< colonKeys])
+  let serverKeyStr = decode(keys[colonKeys + 1 .. ^1])
+  if storedKeyStr.len != 32 or serverKeyStr.len != 32:
+    raise newException(ValueError, "Invalid SCRAM secret keys: key length must be 32 bytes")
+
+  var storedKey, serverKey: array[32, char]
+  copyMem(addr storedKey[0], unsafeAddr storedKeyStr[0], 32)
+  copyMem(addr serverKey[0], unsafeAddr serverKeyStr[0], 32)
+
+  return ScramVerifier(
+    salt: salt,
+    iterations: iterations,
+    storedKey: storedKey,
+    serverKey: serverKey
+  )
+
 

@@ -83,3 +83,27 @@ suite "SCRAM-SHA-256 and Cryptographic Primitives":
     let (valid, _) = server.verifyClientFinal(clientFinal)
     check valid == false
 
+  test "SCRAM secret serialization and deserialization (PgBouncer format)":
+    let verifier = generateVerifier("MyHermesSecurePassword123")
+    let secretStr = formatScramSecret(verifier)
+    check secretStr.startsWith("SCRAM-SHA-256$4096:")
+    check "$" in secretStr
+    check ":" in secretStr
+
+    let parsedVerifier = parseScramSecret(secretStr)
+    check parsedVerifier.iterations == verifier.iterations
+    check parsedVerifier.salt == verifier.salt
+    check parsedVerifier.storedKey == verifier.storedKey
+    check parsedVerifier.serverKey == verifier.serverKey
+
+    # Verify that a client can authenticate using the parsed verifier
+    var server = newScramServerSession(parsedVerifier)
+    var client = newScramClient("alice", "MyHermesSecurePassword123")
+    let c1 = client.buildClientFirstMessage()
+    let s1 = server.processClientFirstAndBuildChallenge(c1)
+    let c2 = client.processServerFirstAndBuildFinal(s1)
+    let (valid, serverSig) = server.verifyClientFinal(c2)
+    check valid == true
+    check client.verifyServerFinalMessage("v=" & serverSig) == true
+
+

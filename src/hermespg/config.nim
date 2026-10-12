@@ -1,5 +1,6 @@
 ## Dynamic configuration module for HermesPG (CLI and Environment Variables)
 import std/[parseopt, strutils, os, strformat, nativesockets]
+import ./protocol/messages
 import ./backend/pool
 import ./proxy
 
@@ -16,13 +17,15 @@ const
   DefaultMaxQueueSize* = 2000
   DefaultAcquireTimeoutMs* = 15000
   DefaultIdleTxTimeoutMs* = 8000
-  DefaultResetQuery* = "DISCARD ALL;"
+  DefaultResetQuery* = SqlDiscardAll
   DefaultResetBeforeFirstQuery* = true
   DefaultVerbose* = false
   DefaultWorkers* = 1
   DefaultMetricsPort* = Port(9127)
   DefaultMetricsBind* = "0.0.0.0"
   DefaultMetricsEnabled* = true
+  DefaultMode* = ModeSidecar
+  DefaultAuthFile* = ""
 
 proc showVersion*() =
   echo fmt"HermesPG v{HermesVersion} - High-Performance PostgreSQL Connection Pooler & Proxy in Nim"
@@ -35,11 +38,15 @@ High-performance, lightweight PostgreSQL connection pooler and proxy in Nim.
 USAGE:
   hermespg [OPTIONS]
 
-PROXY SERVER OPTIONS:
+PROXY SERVER & ARCHITECTURE OPTIONS:
   -b, --bind <host>             Listen IP address (default: 0.0.0.0, env: HERMES_BIND)
   -p, --port <port>             Listen port for frontend clients (default: 6432, env: HERMES_PORT or PORT)
   -w, --workers <num>           Number of native worker threads with SO_REUSEPORT (default: 1, env: HERMES_WORKERS)
   -V, --verbose                 Enable detailed debug logging (default: false, env: HERMES_VERBOSE)
+      --mode <sidecar|gateway>  Operational architecture mode (default: sidecar, env: HERMES_MODE)
+      --sidecar                 Shortcut for '--mode sidecar' (single-tenant micro-pooler)
+      --gateway                 Shortcut for '--mode gateway' (multi-tenant enterprise proxy)
+  -a, --auth-file <path>        Credentials file for gateway mode (env: HERMES_AUTH_FILE)
 
 POSTGRESQL BACKEND OPTIONS:
   -H, --pg-host <host>          PostgreSQL server host (default: 127.0.0.1, env: PGHOST)
@@ -133,6 +140,10 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
   if getEnv("HERMES_NO_METRICS", "false").toLowerAscii in ["1", "true", "yes", "on"]:
     metricsEnabled = false
 
+  var modeStr = getEnv("HERMES_MODE", "sidecar").toLowerAscii
+  var mode = if modeStr == "gateway": ModeGateway else: ModeSidecar
+  var authFile = getEnv("HERMES_AUTH_FILE", DefaultAuthFile)
+
   # Parse command-line options
   var p = initOptParser(cmdParams)
   while true:
@@ -148,6 +159,20 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
       of "v", "version":
         showVersion()
         quit(0)
+      of "mode":
+        let m = p.fetchVal("--mode").toLowerAscii
+        if m == "sidecar":
+          mode = ModeSidecar
+        elif m == "gateway":
+          mode = ModeGateway
+        else:
+          quit(fmt"[CLI ERROR] Invalid mode '{m}'. Valid modes are 'sidecar' or 'gateway'.", 1)
+      of "sidecar":
+        mode = ModeSidecar
+      of "gateway":
+        mode = ModeGateway
+      of "a", "auth-file":
+        authFile = p.fetchVal("--auth-file")
       of "b", "bind":
         listenAddress = p.fetchVal("--bind")
       of "p", "port":
@@ -189,6 +214,12 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
     of cmdArgument:
       quit(fmt"[CLI ERROR] Unexpected argument: '{p.key}'. Run 'hermespg --help' for usage information.", 1)
 
+  if mode == ModeGateway:
+    if authFile.len == 0 and fileExists("userlist.txt"):
+      authFile = "userlist.txt"
+    if authFile.len > 0 and not fileExists(authFile):
+      quit(fmt"[CLI ERROR] Auth file not found: '{authFile}'", 1)
+
   let poolSettings = PoolSettings(
     pgHost: pgHost,
     pgPort: pgPort,
@@ -211,5 +242,7 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
     workers: workers,
     metricsPort: metricsPort,
     metricsBind: metricsBind,
-    metricsEnabled: metricsEnabled
+    metricsEnabled: metricsEnabled,
+    mode: mode,
+    authFile: authFile
   )

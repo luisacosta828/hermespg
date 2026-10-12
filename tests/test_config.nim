@@ -1,4 +1,4 @@
-import std/[unittest, envvars, nativesockets]
+import std/[unittest, envvars, nativesockets, os]
 import hermespg/config
 import hermespg/proxy
 import hermespg/backend/pool
@@ -88,3 +88,44 @@ suite "HermesPG Dynamic Configuration & CLI":
     let cfg = parseConfig(@["-H", "cli-wins.net"])
     check cfg.poolSettings.pgHost == "cli-wins.net"
     delEnv("PGHOST")
+
+  test "ProxyMode default is Sidecar":
+    let cfg = parseConfig(@[])
+    check cfg.mode == ModeSidecar
+    check cfg.authFile == ""
+
+  test "ProxyMode CLI flags: --sidecar, --gateway, --mode":
+    let cfgSidecar = parseConfig(@["--sidecar"])
+    check cfgSidecar.mode == ModeSidecar
+
+    let cfgModeSidecar = parseConfig(@["--mode", "sidecar"])
+    check cfgModeSidecar.mode == ModeSidecar
+
+    # In a temp file for auth-file
+    let tmpAuth = getTempDir() / "test_cli_userlist.txt"
+    writeFile(tmpAuth, "\"test\" \"secret\"\n")
+    try:
+      let cfgGateway = parseConfig(@["--gateway", "-a", tmpAuth])
+      check cfgGateway.mode == ModeGateway
+      check cfgGateway.authFile == tmpAuth
+
+      let cfgModeGateway = parseConfig(@["--mode", "gateway", "--auth-file", tmpAuth])
+      check cfgModeGateway.mode == ModeGateway
+      check cfgModeGateway.authFile == tmpAuth
+    finally:
+      removeFile(tmpAuth)
+
+  test "ProxyMode environment variables":
+    putEnv("HERMES_MODE", "gateway")
+    let tmpAuth = getTempDir() / "test_env_userlist.txt"
+    writeFile(tmpAuth, "\"test\" \"secret\"\n")
+    putEnv("HERMES_AUTH_FILE", tmpAuth)
+    try:
+      let cfg = parseConfig(@[])
+      check cfg.mode == ModeGateway
+      check cfg.authFile == tmpAuth
+    finally:
+      delEnv("HERMES_MODE")
+      delEnv("HERMES_AUTH_FILE")
+      removeFile(tmpAuth)
+

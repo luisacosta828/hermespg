@@ -2,6 +2,7 @@
 nimcache/
 *.exe
 /pool
+/bin/
 /hermespg
 /bench
 /tests/test_protocol
@@ -11,6 +12,8 @@ nimcache/
 /tests/test_scram
 /tests/test_metrics
 /tests/test_scram_live
+/tests/test_catalog
+/tests/test_gateway
 /tests/bench_scram_efficiency
 /tests/bench_load
 *.out

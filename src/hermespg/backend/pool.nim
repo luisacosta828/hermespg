@@ -109,18 +109,23 @@ proc tryAcquireFast*(pool: ConnectionPool, conn: var BackendConn): bool {.inline
     return false
 
   while pool.idleConns.len > 0:
-    let c = pool.idleConns.pop()
-    if c.isAlive and not c.socket.isClosed and not c.isDirty:
-      conn = c
+    let top = pool.idleConns[^1]
+    if not top.isAlive or top.socket.isClosed:
+      discard pool.idleConns.pop()
+      dec pool.activeCount
+      mIdleConnections.setMetric(pool.idleConns.len)
+      mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
+      continue
+    elif top.isDirty:
+      # Dirty connection requires async executeDiscardAll(); leave in pool for acquire()
+      return false
+    else:
+      conn = pool.idleConns.pop()
       mAcquireTotal.incMetric()
       mAcquireFastPathTotal.incMetric()
       mIdleConnections.setMetric(pool.idleConns.len)
       mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
       return true
-    else:
-      dec pool.activeCount
-      mIdleConnections.setMetric(pool.idleConns.len)
-      mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
 
   return false
 
@@ -134,7 +139,10 @@ proc acquire*(pool: ConnectionPool): Future[AcquireResult] {.async.} =
     if conn.isAlive and not conn.socket.isClosed:
       if pool.settings.resetBeforeFirstQuery and conn.isDirty and pool.settings.resetQuery.len > 0:
         mDirtyResetsTotal.incMetric()
-        let ok = await conn.executeSimple(pool.settings.resetQuery)
+        let ok = if pool.settings.resetQuery == SqlDiscardAll:
+                   await conn.executeDiscardAll()
+                 else:
+                   await conn.executeSimple(pool.settings.resetQuery)
         if not ok:
           await conn.terminate()
           dec pool.activeCount
@@ -142,6 +150,8 @@ proc acquire*(pool: ConnectionPool): Future[AcquireResult] {.async.} =
           mActiveConnections.setMetric(pool.activeCount - pool.idleConns.len)
           continue
         conn.isDirty = false
+        conn.currentRole = ""
+        conn.lastClientId = 0
 
       mAcquireTotal.incMetric()
       mAcquireFastPathTotal.incMetric()
@@ -267,8 +277,13 @@ proc release*(pool: ConnectionPool, conn: BackendConn, dirty = false) {.async.} 
         continue
       if pool.settings.resetBeforeFirstQuery and conn.isDirty and pool.settings.resetQuery.len > 0:
         mDirtyResetsTotal.incMetric()
-        discard await conn.executeSimple(pool.settings.resetQuery)
+        if pool.settings.resetQuery == SqlDiscardAll:
+          discard await conn.executeDiscardAll()
+        else:
+          discard await conn.executeSimple(pool.settings.resetQuery)
         conn.isDirty = false
+        conn.currentRole = ""
+        conn.lastClientId = 0
       nextClient.fut.complete(conn)
       return
 
