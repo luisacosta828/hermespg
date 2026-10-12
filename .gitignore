@@ -9,6 +9,9 @@ nimcache/
 /tests/test_config
 /tests/test_extended_query
 /tests/test_scram
+/tests/test_metrics
+/tests/test_scram_live
+/tests/bench_scram_efficiency
 /tests/bench_load
 *.out
 testresults/

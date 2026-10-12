@@ -1,0 +1,13 @@
+.git
+.github
+experiments/
+testresults/
+nimcache/
+hermespg
+*.tar.gz
+*.zip
+*.pdf
+*.html
+tests/
+assets/
+deploy/monitoring/

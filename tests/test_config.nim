@@ -6,6 +6,7 @@ import hermespg/backend/pool
 suite "HermesPG Dynamic Configuration & CLI":
   test "Default configuration":
     let cfg = parseConfig(@[])
+    check HermesVersion == "0.4.0"
     check cfg.listenAddress == "0.0.0.0"
     check cfg.listenPort == Port(6432)
     check cfg.verbose == false

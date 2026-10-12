@@ -10,10 +10,11 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/Release-v0.4.0-blue.svg" alt="Release v0.4.0" />
   <img src="https://img.shields.io/badge/Language-Nim%202.0-orange.svg" alt="Nim 2.0" />
+  <img src="https://img.shields.io/badge/Docker%20Size-637%20KB-brightgreen.svg" alt="Docker Size: 637 KB" />
   <img src="https://img.shields.io/badge/Throughput-140%2C000%2B%20TPS-brightgreen.svg" alt="Throughput: 140,000+ TPS" />
-  <img src="https://img.shields.io/badge/Binary%20Size-300%20KB-blue.svg" alt="Binary Size" />
-  <img src="https://img.shields.io/badge/Memory%20Footprint-~3%20MB%20RSS-blueviolet.svg" alt="Memory Footprint" />
+  <img src="https://img.shields.io/badge/Memory%20Footprint-~21%20MB%20RSS-blueviolet.svg" alt="Memory Footprint" />
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT" />
 </p>
 
@@ -71,6 +72,46 @@ Because HermesPG compiles to a standalone **287 KB static binary** and uses only
 * **Transaction Watchdog (`idleTxTimeoutMs`)**: Detects rogue or abandoned transactions holding locks (`BEGIN` without `COMMIT`), issuing an automatic forced `ROLLBACK` to recover physical connections.
 * **Automatic Session Sanitization**: Tracks runtime parameter mutations (`SET timezone ...`) and automatically issues `DISCARD ALL;` before re-leasing dirty connections.
 * **Featherweight Native Footprint**: Standalone ~280 KB native binary running with deterministic ARC/ORC memory management (~3 MB baseline RSS) and zero external runtime dependencies.
+
+---
+
+## 📦 Installation & Deployment
+
+HermesPG provides three instant, hassle-free distribution channels:
+
+### 1. One-Line Installer (Linux & macOS)
+Install the pre-compiled, stripped static binary directly into your system:
+```bash
+curl -fsSL https://raw.githubusercontent.com/luisacosta828/hermespg/main/install.sh | bash
+```
+* **Auto-Detection**: Automatically identifies OS (`linux`, `darwin`) and CPU architecture (`amd64`, `arm64`).
+* **Integrity Validation**: Verifies SHA256 cryptographic checksums before installation.
+* **Smart Permissions**: Installs to `/usr/local/bin/hermespg` (or falls back to `~/.local/bin/hermespg` if non-root).
+
+### 2. Multi-Architecture Docker Container (GHCR)
+Deploy using the ultra-compact, hardened scratch container image (**~637 KB**) supporting both `linux/amd64` and `linux/arm64`:
+```bash
+# Pull from GitHub Container Registry
+docker pull ghcr.io/luisacosta828/hermespg:latest
+
+# Run container (Proxy on 6432, Prometheus metrics on 9127)
+docker run --rm -it \
+  -p 6432:6432 \
+  -p 9127:9127 \
+  -e PGHOST=127.0.0.1 \
+  -e PGPORT=5432 \
+  -e PGUSER=postgres \
+  -e PGPASSWORD=secret \
+  ghcr.io/luisacosta828/hermespg:latest
+```
+
+### 3. Build from Source (Nim 2.0+)
+```bash
+git clone https://github.com/luisacosta828/hermespg.git
+cd hermespg
+nimble install -y --depsOnly
+nim c -d:danger --opt:speed --passC:"-flto -fomit-frame-pointer" --passL:"-flto -s" -o:hermespg src/hermespg.nim
+```
 
 ---
 
@@ -272,35 +313,34 @@ HermesPG follows an iterative, production-grade development roadmap:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        HermesPG Development Roadmap                     │
+│                        HermesPG Development Roadmap                    │
 └────────────────────────────────────────────────────────────────────────┘
-  [x] Phase 1: Core Engine & Transaction Pooling (Current Release)
-       ├── Sub-0.2ms pre-assembled binary handshake
-       ├── Full Extended Query protocol pipelining (Parse/Bind/Execute/Sync)
-       ├── Transaction state pinning & dirty session tracking
-       ├── Bounded O(1) wait queue & Fail-Fast Load Shedding
-       ├── Rogue transaction watchdog (auto-ROLLBACK)
-       ├── 301 KB Docker Scratch container & 140,000+ sustained TPS
-       └── Multi-language driver verification (Node, Go, Python, C#)
+  [x] Phase 1: Packaging, Distribution & Engine Hardening (v0.4.0)
+       ├── Multi-arch OCI Docker images (linux/amd64 & linux/arm64) on GHCR
+       ├── 637 KB minimal scratch container with unprivileged user (10001:10001)
+       ├── Automated CI/CD release pipeline with cryptographic SHA256 checksums
+       ├── Production one-line installer script (install.sh)
+       ├── Thread-local packet buffer pooling (acquirePacketBuffer / releasePacketBuffer)
+       ├── Zero-allocation startup user parser (findStartupUser)
+       └── Strict ORC cycle collection preventing closure memory leaks (21-24 MB flat RSS)
 
-  [x] Phase 2: Modern Authentication & Observability (Current Release)
-       ├── Native SCRAM-SHA-256 backend authentication (RFC 5802 / RFC 7677)
-       ├── Full SASL Server frontend gatekeeper mode with sub-4 µs verification
-       ├── Zero-plaintext precomputed Verifiers (StoredKey & ServerKey)
-       ├── Instant brute-force & wrong password mitigation (SQLSTATE 28P01 in < 2.1 µs)
-       ├── Built-in lock-free Prometheus & OpenMetrics Exporter (/metrics on port 9127)
-       └── Containerized Prometheus + Grafana monitoring stack with pre-built dashboard
+  [ ] Phase 2: PostgreSQL Query Cancellation (CancelRequest Protocol) (v0.5.0)
+       ├── Asynchronous CancelRequest listener on port 6432
+       ├── Ephemeral backend connections for issuing SIGINT backend cancels
+       ├── Dynamic backend PID & secret key mapping table
+       └── Seamless integration with Npgsql, pgx, node-postgres, and psql (Ctrl+C)
 
-  [ ] Phase 3: Session Pooling & Operational Controls (Planned)
-       ├── Session-Level Pooling mode (for stateful legacy applications)
-       ├── Query cancellation support (CancelRequest message handling)
-       ├── Dynamic runtime reload (SIGHUP configuration reload)
-       └── Administrative management console (PAUSE, RESUME, RELOAD, KILL)
+  [ ] Phase 3: Interactive Administrative Console (SHOW / PAUSE / RELOAD) (v0.6.0)
+       ├── Virtual admin database (e.g., hermespg or pgbouncer emulation)
+       ├── Administrative query parser (SHOW POOLS, SHOW CLIENTS, SHOW STATS)
+       ├── Operational commands: PAUSE, RESUME, RELOAD, KILL
+       └── Real-time interactive administration from any standard psql shell
 
-  [ ] Phase 4: Multi-Tenancy & Edge Routing (Planned)
-       ├── Dynamic multi-database / multi-user routing
-       ├── Automatic read/write query splitting for read replicas
-       └── Health check and circuit breaker failover for replicas
+  [ ] Phase 4: High Availability Read/Write Query Splitting (v0.7.0)
+       ├── Transparent routing of SELECT queries to read replicas
+       ├── Automatic failover to primary for mutations (INSERT, UPDATE, DELETE)
+       ├── Transaction pinning (ensuring read-after-write consistency)
+       └── Asynchronous health checks and circuit breaker failover
 ```
 
 ---

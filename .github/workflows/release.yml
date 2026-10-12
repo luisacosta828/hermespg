@@ -1,0 +1,125 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Linux Static Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            binary_name: hermespg-linux-amd64
+          - arch: arm64
+            platform: linux/arm64
+            binary_name: hermespg-linux-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: ${{ matrix.platform }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build static binary in Alpine container
+        run: |
+          mkdir -p dist
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --target builder \
+            --tag builder-${{ matrix.arch }} \
+            --load .
+          
+          docker run --rm \
+            --platform ${{ matrix.platform }} \
+            -v "$(pwd)/dist:/out" \
+            builder-${{ matrix.arch }} \
+            cp /app/hermespg /out/${{ matrix.binary_name }}
+          
+          chmod +x dist/${{ matrix.binary_name }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary_name }}
+          path: dist/${{ matrix.binary_name }}
+          if-no-files-found: error
+
+  build-darwin:
+    name: Build macOS Binaries
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+            binary_name: hermespg-darwin-arm64
+          - os: macos-13
+            arch: amd64
+            binary_name: hermespg-darwin-amd64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nim
+        run: |
+          brew install nim
+
+      - name: Install dependencies & compile
+        run: |
+          mkdir -p dist
+          nimble install -y --depsOnly
+          nim c -d:danger --opt:speed --passC:"-flto -fomit-frame-pointer" --passL:"-flto" -o:dist/${{ matrix.binary_name }} src/hermespg.nim
+          strip dist/${{ matrix.binary_name }}
+          chmod +x dist/${{ matrix.binary_name }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary_name }}
+          path: dist/${{ matrix.binary_name }}
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-linux, build-darwin]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256 checksums
+        working-directory: release-assets
+        run: |
+          ls -la
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false

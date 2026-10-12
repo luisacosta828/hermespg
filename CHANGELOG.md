@@ -5,6 +5,32 @@ All notable changes to **HermesPG** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-11
+
+### Added
+* **Multi-Architecture OCI Container Images (`linux/amd64`, `linux/arm64`)**:
+  * Automated multi-arch builds using GitHub Actions Buildx and QEMU, published to GitHub Container Registry (`ghcr.io/luisacosta828/hermespg`).
+  * Sub-megabyte scratch image footprint (**~637 KB**) containing only the stripped static Musl ELF binary (`-flto -static -s -Wl,--gc-sections`).
+  * Production container hardening: unprivileged non-root user execution (`USER 10001:10001`), root CA certificates bundle, and dual port exposure (`6432` proxy and `9127` Prometheus metrics).
+* **Official One-Line Installer (`install.sh`)**:
+  * Production-grade shell installer (`curl -fsSL https://raw.githubusercontent.com/luisacosta828/hermespg/main/install.sh | bash`) supporting Linux and macOS (`darwin`), with automatic CPU architecture detection (`amd64` / `arm64`).
+  * Cryptographic integrity verification via `SHA256SUMS.txt`.
+  * Non-root fallback to `~/.local/bin` when write access to `/usr/local/bin` is unavailable.
+* **Automated CI/CD Workflows (`.github/workflows`)**:
+  * `.github/workflows/docker.yml`: Automated multi-arch build and push to GHCR on tags and `main` branch.
+  * `.github/workflows/release.yml`: Automated matrix builds for Linux (`amd64`, `arm64`) and macOS (`darwin-amd64`, `darwin-arm64`), generating `SHA256SUMS.txt` and publishing GitHub Releases.
+* **Thread-Local Packet Buffer Pooling**:
+  * Implemented `acquirePacketBuffer` and `releasePacketBuffer` with thread-local pooling (`gPacketBufferPool`) in `protocol/codec.nim`, cutting heap churn and GC pressure under high-volume packet routing.
+* **Zero-Copy Startup Parameter Parser**:
+  * Implemented `findStartupUser` to extract client usernames directly from startup packet buffers, eliminating `Table[string, string]` allocations during connection handshakes.
+
+### Fixed
+* **Memory Leak Resolution (`--mm:orc`)**:
+  * Resolved multi-gigabyte closure reference leaks occurring under `--mm:arc` with `asyncdispatch` `Future` cycles.
+  * Preserved ORC cycle collection in `config.nims`. Empirically verified via Linux `/proc/<pid>/status`: `VmRSS` remains strictly flat at **21.1 – 24.5 MB** across >15 million transactions.
+
+---
+
 ## [0.3.0] - 2026-10-10
 
 ### Added
