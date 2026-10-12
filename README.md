@@ -313,9 +313,26 @@ HermesPG follows an iterative, production-grade development roadmap:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        HermesPG Development Roadmap                    │
+│                        HermesPG Development Roadmap                     │
 └────────────────────────────────────────────────────────────────────────┘
-  [x] Phase 1: Packaging, Distribution & Engine Hardening (v0.4.0)
+  [x] Phase 1: Core Engine & Transaction Pooling
+       ├── Sub-0.2ms pre-assembled binary handshake
+       ├── Full Extended Query protocol pipelining (Parse/Bind/Execute/Sync)
+       ├── Transaction state pinning & dirty session tracking
+       ├── Bounded O(1) wait queue & Fail-Fast Load Shedding
+       ├── Rogue transaction watchdog (auto-ROLLBACK)
+       ├── Ultra-compact Docker Scratch container & 140,000+ sustained TPS
+       └── Multi-language driver verification (Node, Go, Python, C#)
+
+  [x] Phase 2: Modern Authentication & Observability
+       ├── Native SCRAM-SHA-256 backend authentication (RFC 5802 / RFC 7677)
+       ├── Full SASL Server frontend gatekeeper mode with sub-4 µs verification
+       ├── Zero-plaintext precomputed Verifiers (StoredKey & ServerKey)
+       ├── Instant brute-force mitigation (SQLSTATE 28P01 in < 2.1 µs)
+       ├── Built-in lock-free Prometheus & OpenMetrics Exporter (/metrics on port 9127)
+       └── Containerized Prometheus + Grafana monitoring stack with pre-built dashboard
+
+  [x] Phase 3: Packaging, Multi-Arch Distribution & Engine Hardening (v0.4.0)
        ├── Multi-arch OCI Docker images (linux/amd64 & linux/arm64) on GHCR
        ├── 637 KB minimal scratch container with unprivileged user (10001:10001)
        ├── Automated CI/CD release pipeline with cryptographic SHA256 checksums
@@ -324,23 +341,16 @@ HermesPG follows an iterative, production-grade development roadmap:
        ├── Zero-allocation startup user parser (findStartupUser)
        └── Strict ORC cycle collection preventing closure memory leaks (21-24 MB flat RSS)
 
-  [ ] Phase 2: PostgreSQL Query Cancellation (CancelRequest Protocol) (v0.5.0)
-       ├── Asynchronous CancelRequest listener on port 6432
-       ├── Ephemeral backend connections for issuing SIGINT backend cancels
-       ├── Dynamic backend PID & secret key mapping table
-       └── Seamless integration with Npgsql, pgx, node-postgres, and psql (Ctrl+C)
+  [ ] Phase 4: Operational Controls & Query Cancellation (Planned)
+       ├── Query cancellation support (CancelRequest message handling)
+       ├── Interactive administrative console (SHOW POOLS, SHOW CLIENTS, PAUSE, RESUME)
+       ├── Dynamic runtime reload (SIGHUP configuration reload)
+       └── Session-Level Pooling mode (for stateful legacy applications)
 
-  [ ] Phase 3: Interactive Administrative Console (SHOW / PAUSE / RELOAD) (v0.6.0)
-       ├── Virtual admin database (e.g., hermespg or pgbouncer emulation)
-       ├── Administrative query parser (SHOW POOLS, SHOW CLIENTS, SHOW STATS)
-       ├── Operational commands: PAUSE, RESUME, RELOAD, KILL
-       └── Real-time interactive administration from any standard psql shell
-
-  [ ] Phase 4: High Availability Read/Write Query Splitting (v0.7.0)
-       ├── Transparent routing of SELECT queries to read replicas
-       ├── Automatic failover to primary for mutations (INSERT, UPDATE, DELETE)
-       ├── Transaction pinning (ensuring read-after-write consistency)
-       └── Asynchronous health checks and circuit breaker failover
+  [ ] Phase 5: Multi-Tenancy & Edge Routing (Planned)
+       ├── Dynamic multi-database / multi-user routing
+       ├── Automatic read/write query splitting for read replicas
+       └── Health check and circuit breaker failover for replicas
 ```
 
 ---

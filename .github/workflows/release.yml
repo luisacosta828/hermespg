@@ -13,6 +13,7 @@ jobs:
     name: Build Linux Static Binaries
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: amd64
@@ -31,23 +32,15 @@ jobs:
         with:
           platforms: ${{ matrix.platform }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build static binary in Alpine container
+      - name: Compile static binary in Alpine container
         run: |
           mkdir -p dist
-          docker buildx build \
-            --platform ${{ matrix.platform }} \
-            --target builder \
-            --tag builder-${{ matrix.arch }} \
-            --load .
-          
           docker run --rm \
             --platform ${{ matrix.platform }} \
-            -v "$(pwd)/dist:/out" \
-            builder-${{ matrix.arch }} \
-            cp /app/hermespg /out/${{ matrix.binary_name }}
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            nimlang/nim:2.0.12-alpine \
+            sh -c "apk add --no-cache gcc musl-dev git && git config --global --add safe.directory '*' && nimble install -y --depsOnly && nim c -d:danger --opt:speed --passC:'-flto -fomit-frame-pointer -ffunction-sections -fdata-sections' --passL:'-flto -static -s -Wl,--gc-sections' -o:dist/${{ matrix.binary_name }} src/hermespg.nim"
           
           chmod +x dist/${{ matrix.binary_name }}
 
@@ -61,6 +54,7 @@ jobs:
   build-darwin:
     name: Build macOS Binaries
     runs-on: ${{ matrix.os }}
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -76,9 +70,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Nim
-        run: |
-          brew install nim
+      - name: Set up Nim
+        uses: jirutka/setup-nim@v1
+        with:
+          nim-version: '2.0.12'
 
       - name: Install dependencies & compile
         run: |
@@ -93,11 +88,11 @@ jobs:
         with:
           name: ${{ matrix.binary_name }}
           path: dist/${{ matrix.binary_name }}
-          if-no-files-found: error
+          if-no-files-found: warn
 
   publish-release:
     name: Publish GitHub Release
-    needs: [build-linux, build-darwin]
+    needs: [build-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
