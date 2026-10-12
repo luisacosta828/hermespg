@@ -106,7 +106,7 @@ jobs:
         working-directory: release-assets
         run: |
           ls -la
-          sha256sum * > SHA256SUMS.txt
+          sha256sum hermespg-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create GitHub Release
