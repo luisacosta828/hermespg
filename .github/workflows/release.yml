@@ -68,17 +68,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Nim
-        uses: iffy/install-nim@v5
-        with:
-          version: binary:2.0.12
+      - name: Install Nim
+        run: |
+          if ! command -v nim >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install nim || {
+              curl https://nim-lang.org/choosenim/init.sh -sSf | sh -s -- -y
+              echo "$HOME/.nimble/bin" >> $GITHUB_PATH
+            }
+          fi
+          echo "Nim version:"
+          nim --version || true
 
       - name: Install dependencies & compile
         run: |
           mkdir -p dist
           nimble install -y --depsOnly
           nim c -d:danger --opt:speed --passC:"-flto -fomit-frame-pointer" --passL:"-flto" -o:dist/${{ matrix.binary_name }} src/hermespg.nim
-          strip dist/${{ matrix.binary_name }}
+          strip dist/${{ matrix.binary_name }} || true
           chmod +x dist/${{ matrix.binary_name }}
 
       - name: Upload binary artifact
@@ -90,7 +96,7 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    needs: [build-linux]
+    needs: [build-linux, build-darwin]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
