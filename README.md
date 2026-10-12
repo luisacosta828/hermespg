@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Release-v0.4.0-blue.svg" alt="Release v0.4.0" />
+  <img src="https://img.shields.io/badge/Release-v0.5.0-blue.svg" alt="Release v0.5.0" />
   <img src="https://img.shields.io/badge/Language-Nim%202.0-orange.svg" alt="Nim 2.0" />
   <img src="https://img.shields.io/badge/Docker%20Size-637%20KB-brightgreen.svg" alt="Docker Size: 637 KB" />
   <img src="https://img.shields.io/badge/Throughput-140%2C000%2B%20TPS-brightgreen.svg" alt="Throughput: 140,000+ TPS" />
@@ -59,6 +59,10 @@ Because HermesPG compiles to a standalone **287 KB static binary** and uses only
 
 ## ⚡ Key Features
 
+* **ProxyMode Strategy Pattern (`--sidecar` vs `--gateway`)**: Architectural dual-mode operating model. **Sidecar Mode** acts as a micro-pooler dedicated to co-located microservices with zero-allocation, sub-0.2ms throughput. **Gateway Mode** acts as an enterprise multi-tenant database gateway supporting diverse connecting users and dynamic role switching.
+* **PgBouncer-Compatible Authentication Catalog (`userlist.txt`)**: Multi-tenant credential management supporting SCRAM-SHA-256 verifiers and plaintext passwords with strict SQL identifier validation and SQL injection prevention.
+* **Dynamic Role Dispatching & PostgreSQL Security**: Automatically switches PostgreSQL execution roles via `SET ROLE <user>;` upon tenant lease, enforcing SQLSTATE `42501` permission boundaries.
+* **Strict Session Boundary Isolation (`lastClientId`)**: Tracks frontend client connections to ensure temporary tables, prepared statements, and session settings are 100% isolated and cleaned via precompiled `DISCARD ALL;` across client sessions and upon client disconnect (`\q`).
 * **Full-Stack SCRAM-SHA-256 Authentication (RFC 5802 / RFC 7677)**: Dual-role SASL state machine supporting both secure PostgreSQL backend connections and strict frontend client verification. Features precomputed SCRAM Verifiers (`StoredKey` and `ServerKey`) delivering sub-4 µs verification latency (~268,000 verifications/sec per core) and immediate attack rejection (< 2.1 µs) with SQLSTATE `28P01` while completely eliminating runtime PBKDF2 overhead.
 * **Built-in Prometheus & OpenMetrics Exporter (`/metrics`)**: Lock-free, zero-allocation metrics engine backed by `std/atomics`, exposing live connection pool saturation, fast-path acquisition ratios, queue depth, load shedding rejections, SCRAM authentication telemetry, and watchdog rollbacks on an independent asynchronous HTTP listener (port `9127`).
 * **Zero-Allocation Monotonic Wait Queue**: Queue timeout management driven by high-resolution monotonic deadlines (`MonoTime`) and a single lightweight $O(1)$ watchdog, eliminating event-loop timer proliferation and keeping memory flat under multi-million transaction saturation.
@@ -313,6 +317,10 @@ HermesPG supports full 12-factor configuration via CLI flags and environment var
 
 | Flag | Long Option | Environment Variable | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| | `--mode <sidecar\|gateway>` | `HERMES_MODE` | `sidecar` | Operational proxy mode (single-tenant sidecar or multi-tenant gateway) |
+| | `--sidecar` | | | Shortcut for `--mode sidecar` (micro-pooler mode) |
+| | `--gateway` | | | Shortcut for `--mode gateway` (multi-tenant enterprise proxy) |
+| `-a` | `--auth-file <path>` | `HERMES_AUTH_FILE` | `userlist.txt` | Credentials file path for gateway mode authentication |
 | `-b` | `--bind <host>` | `HERMES_BIND` | `0.0.0.0` | Listen IP address for incoming client connections |
 | `-p` | `--port <port>` | `HERMES_PORT` / `PORT` | `6432` | Listen port for frontend clients |
 | `-w` | `--workers <num>` | `HERMES_WORKERS` | `1` | Number of autonomous native worker threads |
@@ -431,16 +439,20 @@ HermesPG follows an iterative, production-grade development roadmap:
        ├── Zero-allocation startup user parser (findStartupUser)
        └── Strict ORC cycle collection preventing closure memory leaks (21-24 MB flat RSS)
 
-  [ ] Phase 4: Operational Controls & Query Cancellation (Planned)
+  [x] Phase 4: Multi-Tenant Gateway & Session Isolation (v0.5.0)
+       ├── ProxyMode Strategy Pattern (--sidecar vs --gateway)
+       ├── PgBouncer userlist.txt authentication catalog parsing
+       ├── Multi-tenant SCRAM-SHA-256 frontend gatekeeper verification
+       ├── Dynamic PostgreSQL role dispatching (SET ROLE) with SQLSTATE 42501
+       ├── Zero-allocation precompiled DISCARD ALL; binary wire packet
+       ├── Client session boundary isolation (lastClientId) preventing temp table leakage
+       └── Automatic session hygiene and dirty connection sanitization on client disconnect
+
+  [ ] Phase 5: Operational Controls & Query Cancellation (Planned)
        ├── Query cancellation support (CancelRequest message handling)
        ├── Interactive administrative console (SHOW POOLS, SHOW CLIENTS, PAUSE, RESUME)
        ├── Dynamic runtime reload (SIGHUP configuration reload)
-       └── Session-Level Pooling mode (for stateful legacy applications)
-
-  [ ] Phase 5: Multi-Tenancy & Edge Routing (Planned)
-       ├── Dynamic multi-database / multi-user routing
-       ├── Automatic read/write query splitting for read replicas
-       └── Health check and circuit breaker failover for replicas
+       └── Automatic read/write query splitting for read replicas
 ```
 
 ---

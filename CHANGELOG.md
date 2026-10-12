@@ -5,6 +5,32 @@ All notable changes to **HermesPG** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-10-12
+
+### Added
+* **ProxyMode Strategy Pattern (`--sidecar` vs `--gateway`)**:
+  * Architectural dual-mode proxy engine controlled via `--mode <sidecar|gateway>`, `--sidecar`, `--gateway`, or `HERMES_MODE`.
+  * **Sidecar Mode (`--sidecar`)**: High-throughput, zero-allocation micro-pooler optimized for co-located container sidecars and single-tenant applications with sub-0.2ms latency.
+  * **Gateway Mode (`--gateway`)**: Enterprise multi-tenant database gateway supporting diverse connecting users and dynamic role switching.
+* **Multi-Tenant Authentication Catalog (`src/hermespg/auth/catalog.nim`)**:
+  * PgBouncer-compatible `userlist.txt` authentication catalog supporting both SCRAM-SHA-256 verifiers and plaintext passwords.
+  * Robust line parser handling quoted identifiers, SQL identifier validation (1-63 chars, alphanumeric/underscore), and SQL escaping (`quoteIdentifier`).
+  * Dynamic user lookup with `Table[string, ScramVerifier]` integration during SCRAM frontend handshake.
+* **Dynamic Role Dispatching & PostgreSQL Security Enforcement**:
+  * Seamless PostgreSQL role switching via `SET ROLE <user>;` upon tenant lease.
+  * Rejection with standard SQLSTATE `42501` (`permission denied to set role`) if PostgreSQL role assignment fails.
+* **Strict Session Boundary Isolation (`lastClientId`)**:
+  * Monotonically increasing `clientId` assigned per client TCP connection.
+  * `lastClientId` tracking on backend connections ensures consecutive queries from different client sessions (or different terminal windows) trigger precompiled `DISCARD ALL;` execution before query dispatch.
+  * Preserves temporary tables, session parameters, and prepared statements within the same client session while preventing cross-session leakage.
+* **Automatic Disconnect Hygiene**:
+  * Tracks `lastUsedConn` during client session lifecycle.
+  * Upon client disconnection (`\q` or socket close), idle backend connections are flagged `isDirty = true` and `lastClientId = 0` to purge all residual temporary objects and session state before leasing to future clients.
+* **Precompiled Wire Discard Packets (`protocol/messages.nim`)**:
+  * Compile-time `buildStaticQueryPacket` generating zero-allocation binary wire packets (`WireDiscardAll` and `WireResetRole`).
+* **Preservation of Dirty Connections in `tryAcquireFast`**:
+  * Connection pool's synchronous fast-path `tryAcquireFast` inspects top idle connections and delegates dirty connections to `acquire()` for asynchronous `executeDiscardAll()` reset without destroying backend connections.
+
 ## [0.4.0] - 2026-10-11
 
 ### Added
