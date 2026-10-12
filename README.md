@@ -75,42 +75,132 @@ Because HermesPG compiles to a standalone **287 KB static binary** and uses only
 
 ---
 
-## 📦 Installation & Deployment
+## 📦 Installation & Deployment Guide
 
-HermesPG provides three instant, hassle-free distribution channels:
+HermesPG provides three distribution channels: **Universal One-Line Installer** (for Linux & macOS), **Multi-Architecture Docker Container** (via GHCR), or **Building from Source**.
 
-### 1. One-Line Installer (Linux & macOS)
+---
+
+### 1. Universal One-Line Installer (Linux & macOS)
+
 Install the pre-compiled, stripped static binary directly into your system:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/luisacosta828/hermespg/main/install.sh | bash
 ```
 * **Auto-Detection**: Automatically identifies OS (`linux`, `darwin`) and CPU architecture (`amd64`, `arm64`).
-* **Integrity Validation**: Verifies SHA256 cryptographic checksums before installation.
+* **Integrity Validation**: Cryptographically verifies binary integrity via SHA256 checksums.
 * **Smart Permissions**: Installs to `/usr/local/bin/hermespg` (or falls back to `~/.local/bin/hermespg` if non-root).
 
-### 2. Multi-Architecture Docker Container (GHCR)
-Deploy using the ultra-compact, hardened scratch container image (**~637 KB**) supporting both `linux/amd64` and `linux/arm64`:
-```bash
-# Pull from GitHub Container Registry
-docker pull ghcr.io/luisacosta828/hermespg:latest
+#### Running the Native Binary:
 
-# Run container (Proxy on 6432, Prometheus metrics on 9127)
-docker run --rm -it \
-  -p 6432:6432 \
-  -p 9127:9127 \
+* **PostgreSQL on Localhost (Default 127.0.0.1:5432)**:
+  ```bash
+  hermespg -U postgres -W 'YourSecretPassword' -d postgres
+  ```
+
+* **PostgreSQL on Remote Server, LAN, or Cloud (AWS RDS, Neon, Supabase)**:
+  ```bash
+  hermespg -H db.production.internal -P 5432 -U app_user -W 'YourPassword' -d production -c 25
+  ```
+
+* **12-Factor Configuration (Environment Variables)**:
+  ```bash
+  PGHOST=10.0.0.15 PGPORT=5432 PGUSER=app_user PGPASSWORD=secret HERMES_MAX_CONNS=30 hermespg
+  ```
+
+---
+
+### 2. Multi-Architecture Docker Container (GHCR)
+
+HermesPG is published to GitHub Container Registry as an ultra-compact scratch image (**~637 KB**) supporting both `linux/amd64` and `linux/arm64` (including Raspberry Pi and Apple Silicon).
+
+> [!NOTE]
+> Inside a Docker container, `127.0.0.1` refers to the container's own network namespace, not the host machine. Select the network mode that matches where your PostgreSQL database is located:
+
+#### Scenario A: PostgreSQL running on the SAME host machine (Linux / Raspberry Pi)
+Use `--network host` for the lowest possible network latency and direct access to PostgreSQL on `127.0.0.1:5432`:
+```bash
+docker run --rm -it --network host \
   -e PGHOST=127.0.0.1 \
   -e PGPORT=5432 \
   -e PGUSER=postgres \
-  -e PGPASSWORD=secret \
+  -e PGPASSWORD='YourPassword' \
   ghcr.io/luisacosta828/hermespg:latest
 ```
 
+#### Scenario B: PostgreSQL running on the host via Docker Bridge (macOS / Windows / Linux)
+Use `--add-host=host.docker.internal:host-gateway` to allow the container to route requests back to the host system:
+```bash
+docker run --rm -it \
+  -p 6432:6432 \
+  -p 9127:9127 \
+  --add-host=host.docker.internal:host-gateway \
+  -e PGHOST=host.docker.internal \
+  -e PGPORT=5432 \
+  -e PGUSER=postgres \
+  -e PGPASSWORD='YourPassword' \
+  ghcr.io/luisacosta828/hermespg:latest
+```
+
+#### Scenario C: PostgreSQL running on a Remote Server, LAN, or Cloud Database
+Specify the database host IP or domain name via `PGHOST`:
+```bash
+docker run --rm -it \
+  -p 6432:6432 \
+  -p 9127:9127 \
+  -e PGHOST=192.168.1.50 \
+  -e PGPORT=5432 \
+  -e PGUSER=app_user \
+  -e PGPASSWORD='YourPassword' \
+  -e PGDATABASE=production \
+  -e HERMES_MAX_CONNS=25 \
+  ghcr.io/luisacosta828/hermespg:latest
+```
+
+#### Scenario D: Multi-Container Setup with Docker Compose
+To orchestrate HermesPG together with your PostgreSQL backend and application services:
+```yaml
+services:
+  hermespg:
+    image: ghcr.io/luisacosta828/hermespg:latest
+    container_name: hermespg
+    ports:
+      - "6432:6432" # Client connection port
+      - "9127:9127" # Prometheus metrics port
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: secretpassword
+      PGDATABASE: postgres
+      HERMES_MAX_CONNS: "20"
+      HERMES_MAX_QUEUE: "1000"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_PASSWORD: secretpassword
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
+```
+
+---
+
 ### 3. Build from Source (Nim 2.0+)
+
 ```bash
 git clone https://github.com/luisacosta828/hermespg.git
 cd hermespg
 nimble install -y --depsOnly
 nim c -d:danger --opt:speed --passC:"-flto -fomit-frame-pointer" --passL:"-flto -s" -o:hermespg src/hermespg.nim
+./hermespg -p 6432 -H 127.0.0.1 -P 5432 -U postgres -d postgres -c 20
 ```
 
 ---
