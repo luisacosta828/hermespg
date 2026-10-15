@@ -91,7 +91,7 @@ Install the pre-compiled, stripped static binary directly into your system:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/luisacosta828/hermespg/main/install.sh | bash
 ```
-* **Auto-Detection**: Automatically identifies OS (`linux`, `darwin`) and CPU architecture (`amd64`, `arm64`).
+* **Auto-Detection**: Automatically identifies OS (`linux`, `darwin`) and CPU architecture (`amd64`, `arm64` on Linux; Apple Silicon `arm64` on macOS).
 * **Integrity Validation**: Cryptographically verifies binary integrity via SHA256 checksums.
 * **Smart Permissions**: Installs to `/usr/local/bin/hermespg` (or falls back to `~/.local/bin/hermespg` if non-root).
 

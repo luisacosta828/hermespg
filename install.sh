@@ -14,7 +14,7 @@
 set -euo pipefail
 
 GITHUB_REPO="luisacosta828/hermespg"
-DEFAULT_FALLBACK_VERSION="v0.4.0"
+DEFAULT_FALLBACK_VERSION="v0.5.0"
 
 # Color helpers
 if [ -t 1 ]; then
@@ -135,6 +135,10 @@ main() {
     info "Detected platform: ${os}/${arch}"
     info "Target version:    ${version}"
     info "Install directory: ${install_dir}"
+
+    if [ "$os" = "darwin" ] && [ "$arch" = "amd64" ]; then
+        error "Pre-compiled binaries for macOS x86_64 (Intel) have been discontinued. Apple Silicon (arm64, M1/M2/M3/M4) is supported. On Intel Mac, please build from source with 'nimble install' or run via Docker."
+    fi
 
     local binary_name="hermespg-${os}-${arch}"
     local download_base="https://github.com/${GITHUB_REPO}/releases/download/${version}"

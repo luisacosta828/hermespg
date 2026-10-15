@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **Preservation of Dirty Connections in `tryAcquireFast`**:
   * Connection pool's synchronous fast-path `tryAcquireFast` inspects top idle connections and delegates dirty connections to `acquire()` for asynchronous `executeDiscardAll()` reset without destroying backend connections.
 
+### Fixed
+* **CI/CD Release Workflow for macOS**:
+  * Removed deprecated `macos-13` (Intel x86_64) runner from `.github/workflows/release.yml`. GitHub has retired Intel-based macOS runners, which was causing the macOS matrix build to fail and preventing the automated publication of the GitHub Release.
+  * Native macOS builds are now streamlined on `macos-latest` (Apple Silicon arm64).
+  * Added explicit `make_latest: true` and `workflow_dispatch` trigger to the release workflow.
+  * Updated `install.sh` with a clear deprecation notice guiding macOS Intel users to build from source or use Docker.
+
 ## [0.4.0] - 2026-10-11
 
 ### Added

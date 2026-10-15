@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -50,20 +51,8 @@ jobs:
           if-no-files-found: error
 
   build-darwin:
-    name: Build macOS Binaries
-    runs-on: ${{ matrix.os }}
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            arch: arm64
-            binary_name: hermespg-darwin-arm64
-          - os: macos-13
-            arch: amd64
-            binary_name: hermespg-darwin-amd64
-
+    name: Build macOS Binary (arm64)
+    runs-on: macos-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -84,16 +73,16 @@ jobs:
           export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.nimble/bin:$PATH"
           mkdir -p dist
           nimble install -y --depsOnly
-          nim c -d:danger --opt:speed -o:dist/${{ matrix.binary_name }} src/hermespg.nim
-          strip dist/${{ matrix.binary_name }} || true
-          chmod +x dist/${{ matrix.binary_name }}
+          nim c -d:danger --opt:speed -o:dist/hermespg-darwin-arm64 src/hermespg.nim
+          strip dist/hermespg-darwin-arm64 || true
+          chmod +x dist/hermespg-darwin-arm64
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.binary_name }}
-          path: dist/${{ matrix.binary_name }}
-          if-no-files-found: warn
+          name: hermespg-darwin-arm64
+          path: dist/hermespg-darwin-arm64
+          if-no-files-found: error
 
   publish-release:
     name: Publish GitHub Release
@@ -123,3 +112,4 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
+          make_latest: true
