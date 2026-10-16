@@ -6,7 +6,7 @@ import hermespg/backend/pool
 suite "HermesPG Dynamic Configuration & CLI":
   test "Default configuration":
     let cfg = parseConfig(@[])
-    check HermesVersion == "0.5.0"
+    check HermesVersion == "0.5.1"
     check cfg.listenAddress == "0.0.0.0"
     check cfg.listenPort == Port(6432)
     check cfg.verbose == false
@@ -128,4 +128,8 @@ suite "HermesPG Dynamic Configuration & CLI":
       delEnv("HERMES_MODE")
       delEnv("HERMES_AUTH_FILE")
       removeFile(tmpAuth)
+
+  test "--gen-auth-file CLI flag":
+    let cfg = parseConfig(@["--gen-auth-file", "/tmp/generated_userlist.txt"])
+    check cfg.genAuthFile == "/tmp/generated_userlist.txt"
 

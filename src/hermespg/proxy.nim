@@ -21,6 +21,7 @@ type
     metricsEnabled*: bool
     mode*: ProxyMode
     authFile*: string
+    genAuthFile*: string
 
 
 var
@@ -28,6 +29,7 @@ var
   shutdownFuture* {.threadvar.}: Future[void]
   prebuiltHandshake* {.threadvar.}: string
   scramVerifier* {.threadvar.}: ScramVerifier
+  dummyVerifier* {.threadvar.}: ScramVerifier
   requireAuth* {.threadvar.}: bool
   expectedUser* {.threadvar.}: string
   activeMode* {.threadvar.}: ProxyMode
@@ -184,19 +186,17 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
       clientUser = findStartupUser(clientBuf.data.toOpenArray(4, realInit.length - 1))
 
       var activeVerifier: ScramVerifier
+      var userExists = true
       if activeMode == ModeGateway:
         if not userCatalog.getVerifier(clientUser, activeVerifier):
-          mAuthFailuresInvalidUser.incMetric()
-          let errPkt = buildAuthErrorPacket(clientUser)
-          await clientSock.send(errPkt)
-          return
+          userExists = false
+          activeVerifier = dummyVerifier
       else:
         if expectedUser.len > 0 and clientUser != expectedUser:
-          mAuthFailuresInvalidUser.incMetric()
-          let errPkt = buildAuthErrorPacket(clientUser)
-          await clientSock.send(errPkt)
-          return
-        activeVerifier = scramVerifier
+          userExists = false
+          activeVerifier = dummyVerifier
+        else:
+          activeVerifier = scramVerifier
 
       # Step 1: Send AuthenticationSASL offer (SCRAM-SHA-256)
       if not fastSendDirect(clientSock, unsafeAddr WireSaslOffer[0], WireSaslOffer.len):
@@ -243,13 +243,21 @@ proc handleClientSession(clientSock: AsyncSocket, clientId: int, pool: Connectio
       # Step 4: Read SASLResponse from client
       let saslRespLen = await clientSock.readMessageInto(clientBuf)
       if saslRespLen == 0 or clientBuf.data[0] != MsgPassword:
-        mAuthFailuresInvalidPass.incMetric()
+        if not userExists:
+          mAuthFailuresInvalidUser.incMetric()
+        else:
+          mAuthFailuresInvalidPass.incMetric()
         let errPkt = buildAuthErrorPacket(clientUser)
         await clientSock.send(errPkt)
         return
 
       let clientFinal = clientBuf.data[5 ..< saslRespLen]
       let (valid, serverSigB64) = serverSession.verifyClientFinal(clientFinal)
+      if not userExists:
+        mAuthFailuresInvalidUser.incMetric()
+        let errPkt = buildAuthErrorPacket(clientUser)
+        await clientSock.send(errPkt)
+        return
       if not valid:
         mAuthFailuresInvalidPass.incMetric()
         let errPkt = buildAuthErrorPacket(clientUser)
@@ -424,6 +432,7 @@ proc startServer*(config: ServerConfig) {.async.} =
     echo fmt"[*] Pre-assembled binary handshake cached in memory: {prebuiltHandshake.len} bytes"
 
     activeMode = config.mode
+    dummyVerifier = generateVerifier("hermespg_dummy_anti_enumeration_secret")
     if activeMode == ModeGateway:
       if config.authFile.len > 0:
         echo fmt"[*] Gateway mode: Loading authentication catalog from '{config.authFile}'..."

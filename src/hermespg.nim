@@ -2,6 +2,8 @@ import std/[asyncdispatch, strformat]
 import hermespg/proxy
 import hermespg/config
 import hermespg/metrics
+import hermespg/backend/connection
+import hermespg/auth/catalog
 
 when defined(posix):
   import std/posix
@@ -43,6 +45,19 @@ proc workerThread(cfg: ServerConfig) {.thread.} =
 
 proc main() =
   let serverConfig = parseConfig()
+
+  if serverConfig.genAuthFile.len > 0:
+    let ps = serverConfig.poolSettings
+    echo fmt"[*] Connecting to PostgreSQL ({ps.pgHost}:{ps.pgPort.int}) to export SCRAM-SHA-256 verifiers from pg_shadow..."
+    try:
+      let conn = waitFor connectBackend(ps.pgHost, ps.pgPort, ps.user, ps.password, ps.database, 1)
+      let users = waitFor fetchPgShadowUsers(conn)
+      waitFor conn.terminate()
+      writeSecureAuthFile(serverConfig.genAuthFile, users)
+      echo fmt"[OK] Exported {users.len} SCRAM-SHA-256 user verifier(s) to '{serverConfig.genAuthFile}' (mode 0600)"
+      quit(0)
+    except CatchableError as e:
+      quit(fmt"[FATAL] Failed to generate auth file from pg_shadow: {e.msg}", 1)
 
   setControlCHook(onControlC)
   raiseFileDescriptorLimit()

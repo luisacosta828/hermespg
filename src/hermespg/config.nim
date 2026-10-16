@@ -5,7 +5,7 @@ import ./backend/pool
 import ./proxy
 
 const
-  HermesVersion* = "0.5.0"
+  HermesVersion* = "0.5.1"
   DefaultListenAddress* = "0.0.0.0"
   DefaultListenPort* = Port(6432)
   DefaultPgHost* = "127.0.0.1"
@@ -47,6 +47,7 @@ PROXY SERVER & ARCHITECTURE OPTIONS:
       --sidecar                 Shortcut for '--mode sidecar' (single-tenant micro-pooler)
       --gateway                 Shortcut for '--mode gateway' (multi-tenant enterprise proxy)
   -a, --auth-file <path>        Credentials file for gateway mode (env: HERMES_AUTH_FILE)
+      --gen-auth-file <path>    Export SCRAM-SHA-256 verifiers from pg_shadow to file (0600) and exit
 
 POSTGRESQL BACKEND OPTIONS:
   -H, --pg-host <host>          PostgreSQL server host (default: 127.0.0.1, env: PGHOST)
@@ -143,6 +144,7 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
   var modeStr = getEnv("HERMES_MODE", "sidecar").toLowerAscii
   var mode = if modeStr == "gateway": ModeGateway else: ModeSidecar
   var authFile = getEnv("HERMES_AUTH_FILE", DefaultAuthFile)
+  var genAuthFile = ""
 
   # Parse command-line options
   var p = initOptParser(cmdParams)
@@ -173,6 +175,8 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
         mode = ModeGateway
       of "a", "auth-file":
         authFile = p.fetchVal("--auth-file")
+      of "gen-auth-file":
+        genAuthFile = p.fetchVal("--gen-auth-file")
       of "b", "bind":
         listenAddress = p.fetchVal("--bind")
       of "p", "port":
@@ -214,7 +218,7 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
     of cmdArgument:
       quit(fmt"[CLI ERROR] Unexpected argument: '{p.key}'. Run 'hermespg --help' for usage information.", 1)
 
-  if mode == ModeGateway:
+  if mode == ModeGateway and genAuthFile.len == 0:
     if authFile.len == 0 and fileExists("userlist.txt"):
       authFile = "userlist.txt"
     if authFile.len > 0 and not fileExists(authFile):
@@ -244,5 +248,6 @@ proc parseConfig*(cmdParams: seq[string] = commandLineParams()): ServerConfig =
     metricsBind: metricsBind,
     metricsEnabled: metricsEnabled,
     mode: mode,
-    authFile: authFile
+    authFile: authFile,
+    genAuthFile: genAuthFile
   )

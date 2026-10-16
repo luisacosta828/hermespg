@@ -1,20 +1,14 @@
-import std/[unittest, asyncdispatch, os, nativesockets]
+import std/[unittest, asyncdispatch, asyncnet, os, nativesockets]
 import hermespg/backend/[connection, pool]
+import hermespg/protocol/[messages, codec]
 import hermespg/crypto/scram
+import hermespg/auth/catalog
 import hermespg/proxy
 
 suite "HermesPG Gateway Mode (Multi-Tenant Authentication & Role Dispatching)":
-  test "Gateway multi-user authentication, rejection, and role isolation":
+  test "Gateway multi-user authentication, pg_shadow export, anti-enumeration, and role isolation":
     let tmpDir = getTempDir()
     let authPath = tmpDir / "test_gateway_userlist.txt"
-
-    # Alice has plaintext password, Bob has pre-hashed SCRAM verifier
-    let bobVerifier = generateVerifier("BobSecret!2026")
-    let bobScramStr = formatScramSecret(bobVerifier)
-    let authContent = "# Gateway Mode Test Credentials\n" &
-      "\"hermes_alice\" \"AliceSecret!2026\"\n" &
-      "\"hermes_bob\" \"" & bobScramStr & "\"\n"
-    writeFile(authPath, authContent)
 
     let testPort = Port(6435)
     let poolSettings = PoolSettings(
@@ -31,21 +25,29 @@ suite "HermesPG Gateway Mode (Multi-Tenant Authentication & Role Dispatching)":
       resetBeforeFirstQuery: true
     )
 
-    let srvConfig = ServerConfig(
-      listenAddress: "127.0.0.1",
-      listenPort: testPort,
-      poolSettings: poolSettings,
-      verbose: false,
-      mode: ModeGateway,
-      authFile: authPath
-    )
-
     waitFor (proc() {.async.} =
+      # 0. Export userlist.txt directly from PostgreSQL pg_shadow with 0600 permissions
+      let adminConn = await connectBackend("127.0.0.1", Port(5432), "postgres", "", "postgres", 100)
+      discard await adminConn.executeSimple("SET password_encryption = 'scram-sha-256'; ALTER ROLE hermes_alice WITH LOGIN PASSWORD 'AliceSecret!2026'; ALTER ROLE hermes_bob WITH LOGIN PASSWORD 'BobSecret!2026';")
+      let shadowUsers = await fetchPgShadowUsers(adminConn)
+      await adminConn.terminate()
+      writeSecureAuthFile(authPath, shadowUsers)
+      check checkFilePermissions(authPath) == true
+
+      let srvConfig = ServerConfig(
+        listenAddress: "127.0.0.1",
+        listenPort: testPort,
+        poolSettings: poolSettings,
+        verbose: false,
+        mode: ModeGateway,
+        authFile: authPath
+      )
+
       # 1. Start HermesPG in Gateway mode
       let srvFut = startServer(srvConfig)
       await sleepAsync(200) # Wait for server listener to bind
 
-      # 2. Authenticate as hermes_alice (plaintext password in authfile)
+      # 2. Authenticate as hermes_alice (SCRAM verifier exported from pg_shadow)
       let connAlice = await connectBackend(
         host = "127.0.0.1",
         port = testPort,
@@ -144,21 +146,34 @@ suite "HermesPG Gateway Mode (Multi-Tenant Authentication & Role Dispatching)":
         badPassFailed = true
       check badPassFailed == true
 
-      # 7. Authentication Failure: Unknown tenant user not in userlist
-      var unknownUserFailed = false
-      try:
-        let intruderConn = await connectBackend(
-          host = "127.0.0.1",
-          port = testPort,
-          user = "unknown_intruder",
-          password = "AnyPassword",
-          database = "postgres",
-          connId = 104
-        )
-        await intruderConn.terminate()
-      except IOError:
-        unknownUserFailed = true
-      check unknownUserFailed == true
+      # 7. Anti-Enumeration Check: Unknown user MUST receive full AuthSASL (10) + AuthSASLContinue (11) challenge
+      let rawSock = newAsyncSocket(buffered = false)
+      await rawSock.connect("127.0.0.1", testPort)
+      var startupPayload = writeInt32BE(ProtocolVersion30) & "user\0unknown_intruder\0database\0postgres\0\0"
+      await rawSock.writeMessage(PgMessage(kind: '\0', length: int32(4 + startupPayload.len), payload: startupPayload))
+
+      # Step 1 response from proxy must be AuthSASL (10), NOT an immediate ErrorResponse ('E')
+      let msg1 = await rawSock.readMessage()
+      check msg1.kind == MsgAuth
+      check readInt32BE(msg1.payload, 0) == 10'i32 # AuthSASL
+
+      var scramIntruder = newScramClient("unknown_intruder", "AnyPassword")
+      let cFirst = scramIntruder.buildClientFirstMessage()
+      let saslInit = "SCRAM-SHA-256\0" & writeInt32BE(int32(cFirst.len)) & cFirst
+      await rawSock.writeMessage(PgMessage(kind: MsgPassword, length: int32(4 + saslInit.len), payload: saslInit))
+
+      # Step 2 response from proxy must be AuthSASLContinue (11) using dummyVerifier
+      let msg2 = await rawSock.readMessage()
+      check msg2.kind == MsgAuth
+      check readInt32BE(msg2.payload, 0) == 11'i32 # AuthSASLContinue
+
+      let cFinal = scramIntruder.processServerFirstAndBuildFinal(msg2.payload[4 .. ^1])
+      await rawSock.writeMessage(PgMessage(kind: MsgPassword, length: int32(4 + cFinal.len), payload: cFinal))
+
+      # Step 3 final response must be ErrorResponse ('E') 28P01
+      let msg3 = await rawSock.readMessage()
+      check msg3.kind == MsgErrorResponse
+      rawSock.close()
 
       # 8. Clean shutdown of proxy server
       shutdownRequested = true

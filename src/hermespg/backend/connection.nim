@@ -111,6 +111,79 @@ proc executeDiscardAll*(conn: BackendConn): Future[bool] {.async.} =
 
   return success
 
+proc extractErrorMessage(payload: string): string =
+  var i = 0
+  while i < payload.len and payload[i] != '\0':
+    let code = payload[i]
+    inc i
+    let start = i
+    while i < payload.len and payload[i] != '\0':
+      inc i
+    let val = payload[start ..< i]
+    if i < payload.len:
+      inc i
+    if code == 'M':
+      return val
+  return "PostgreSQL error executing query"
+
+proc queryRows*(conn: BackendConn, sql: string): Future[seq[seq[string]]] {.async.} =
+  ## Executes a simple SQL query and returns all resulting DataRow ('D') rows as strings.
+  ## Raises IOError if the connection fails or PostgreSQL returns an ErrorResponse ('E').
+  if not conn.isAlive or conn.socket.isClosed:
+    raise newException(IOError, "Backend connection is closed or not alive")
+
+  let queryMsg = PgMessage(
+    kind: MsgQuery,
+    length: int32(4 + sql.len + 1),
+    payload: sql & "\0"
+  )
+
+  await conn.socket.writeMessage(queryMsg)
+
+  var rows: seq[seq[string]] = @[]
+  var errMsg = ""
+  var hadError = false
+
+  while true:
+    let msg = await conn.socket.readMessage()
+    if msg.length == 0:
+      conn.isAlive = false
+      raise newException(IOError, "Backend connection closed while reading query results")
+
+    case msg.kind
+    of MsgDataRow:
+      if msg.payload.len >= 2:
+        let colCount = int(readInt16BE(msg.payload, 0))
+        var row = newSeqOfCap[string](colCount)
+        var offset = 2
+        for _ in 0 ..< colCount:
+          if offset + 4 > msg.payload.len:
+            break
+          let colLen = int(readInt32BE(msg.payload, offset))
+          offset += 4
+          if colLen < 0:
+            row.add("")
+          elif offset + colLen <= msg.payload.len:
+            row.add(msg.payload[offset ..< offset + colLen])
+            offset += colLen
+          else:
+            break
+        rows.add(row)
+    of MsgErrorResponse:
+      hadError = true
+      errMsg = extractErrorMessage(msg.payload)
+    of MsgReadyForQuery:
+      if msg.payload.len > 0:
+        conn.lastStatus = toTransactionStatus(msg.payload[0])
+      break
+    else:
+      discard
+
+  if hadError:
+    raise newException(IOError, errMsg)
+
+  return rows
+
 proc connectBackend*(host: string, port: Port, user, password, database: string, connId: int): Future[BackendConn] {.async.} =
   ## Establishes TCP connection and completes authentication handshake with PostgreSQL
   let conn = newBackendConn(connId)

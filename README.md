@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Release-v0.5.0-blue.svg" alt="Release v0.5.0" />
+  <img src="https://img.shields.io/badge/Release-v0.5.1-blue.svg" alt="Release v0.5.1" />
   <img src="https://img.shields.io/badge/Language-Nim%202.0-orange.svg" alt="Nim 2.0" />
   <img src="https://img.shields.io/badge/Docker%20Size-637%20KB-brightgreen.svg" alt="Docker Size: 637 KB" />
   <img src="https://img.shields.io/badge/Throughput-140%2C000%2B%20TPS-brightgreen.svg" alt="Throughput: 140,000+ TPS" />
@@ -321,6 +321,7 @@ HermesPG supports full 12-factor configuration via CLI flags and environment var
 | | `--sidecar` | | | Shortcut for `--mode sidecar` (micro-pooler mode) |
 | | `--gateway` | | | Shortcut for `--mode gateway` (multi-tenant enterprise proxy) |
 | `-a` | `--auth-file <path>` | `HERMES_AUTH_FILE` | `userlist.txt` | Credentials file path for gateway mode authentication |
+| | `--gen-auth-file <path>` | | | Export `SCRAM-SHA-256` verifiers from `pg_shadow` to `<path>` (`0600` mode) and exit |
 | `-b` | `--bind <host>` | `HERMES_BIND` | `0.0.0.0` | Listen IP address for incoming client connections |
 | `-p` | `--port <port>` | `HERMES_PORT` / `PORT` | `6432` | Listen port for frontend clients |
 | `-w` | `--workers <num>` | `HERMES_WORKERS` | `1` | Number of autonomous native worker threads |
@@ -439,9 +440,11 @@ HermesPG follows an iterative, production-grade development roadmap:
        ├── Zero-allocation startup user parser (findStartupUser)
        └── Strict ORC cycle collection preventing closure memory leaks (21-24 MB flat RSS)
 
-  [x] Phase 4: Multi-Tenant Gateway & Session Isolation (v0.5.0)
+  [x] Phase 4: Multi-Tenant Gateway & Session Isolation (v0.5.0 / v0.5.1)
        ├── ProxyMode Strategy Pattern (--sidecar vs --gateway)
-       ├── PgBouncer userlist.txt authentication catalog parsing
+       ├── PgBouncer userlist.txt authentication catalog parsing & 0600 POSIX permission audit
+       ├── Automated pg_shadow SCRAM-SHA-256 verifier exporter (--gen-auth-file)
+       ├── Anti-enumeration SCRAM dummy verifier & cryptographic RAM scrubbing (zeroMem)
        ├── Multi-tenant SCRAM-SHA-256 frontend gatekeeper verification
        ├── Dynamic PostgreSQL role dispatching (SET ROLE) with SQLSTATE 42501
        ├── Zero-allocation precompiled DISCARD ALL; binary wire packet

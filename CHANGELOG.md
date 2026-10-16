@@ -5,6 +5,23 @@ All notable changes to **HermesPG** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-10-15
+
+### Added
+* **Automated `pg_shadow` SCRAM-SHA-256 Verifier Export (`--gen-auth-file <path>`)**:
+  * Connects to PostgreSQL and extracts precomputed `SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>` verifiers directly from `pg_shadow` via `fetchPgShadowUsers` and `queryRows`.
+  * Writes the multi-tenant credential catalog (`userlist.txt`) to disk and enforces strict POSIX `0600` (`rw-------`, owner-only) file permissions via `writeSecureAuthFile`.
+
+### Security
+* **Anti-User-Enumeration SCRAM Defense (`dummyVerifier`)**:
+  * In `--gateway` and `--sidecar` modes, unknown usernames no longer abort prior to the SASL challenge. Instead, HermesPG executes the full 4-step SCRAM-SHA-256 challenge-response handshake against a precomputed `dummyVerifier` before returning SQLSTATE `28P01`, preventing username enumeration via network timing or protocol step counts.
+* **Cryptographic Memory Scrubbing (`secureZeroString`)**:
+  * Overwrites temporary file buffers and password/secret strings in RAM with `zeroMem` immediately after populating `UserCatalog`.
+* **Zero Secret Leakage in Catalog Parse Exceptions**:
+  * `parseAuthLine` reports only the line number (`at line #N`) on syntax errors, never echoing raw lines or secrets into logs or error output.
+* **POSIX File Permissions & Plaintext Auditing (`checkFilePermissions`)**:
+  * Audits `userlist.txt` permissions via `posix.stat` on load and emits `[SECURITY WARNING]` alerts if group/world permissions (`0o077`) are enabled or if plaintext passwords are present.
+
 ## [0.5.0] - 2026-10-12
 
 ### Added

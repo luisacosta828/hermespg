@@ -32,3 +32,6 @@ experiments/
 hermespg_guia_tecnica.html
 *.pdf
 !docs/**
+
+# Authentication credential catalogs
+userlist.txt
